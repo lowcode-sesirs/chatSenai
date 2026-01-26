@@ -111,9 +111,22 @@ function AIMessageContent({ message }) {
           <div className="space-y-1">
             {references.map((ref, index) => (
               <div key={index} className="text-xs text-gray-600">
-                • {ref.source || ref.title || ref}
-                {ref.page && ` - Página ${ref.page}`}
-                {ref.chapter && ` - ${ref.chapter}`}
+                ? Fonte: {ref.source || ref.title || ref}
+                {ref.page && `, p?ginas: ${ref.page}`}
+                {ref.chapter && `, ${ref.chapter}`}
+                {ref.link && (
+                  <div className="mt-1">
+                    Link para o arquivo:{' '}
+                    <a
+                      href={ref.link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#E84910] hover:underline break-all"
+                    >
+                      {ref.link}
+                    </a>
+                  </div>
+                )}
               </div>
             ))}
           </div>

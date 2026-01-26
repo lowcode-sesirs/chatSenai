@@ -212,6 +212,11 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
           
           try {
             const data = JSON.parse(dataStr);
+
+            if (data.event === 'sources' && Array.isArray(data.documents)) {
+              onChunk('', fullText, { sources: data.documents });
+              continue;
+            }
             
             // Extrai o delta (pedaço de texto)
             if (data.delta) {

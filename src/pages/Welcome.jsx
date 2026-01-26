@@ -418,7 +418,23 @@ function Welcome() {
           await getChatStream(
             currentSessionId,
             // onChunk - atualiza a mensagem conforme chega
-            (chunk, accumulated) => {
+            (chunk, accumulated, meta) => {
+              if (meta?.sources) {
+                const references = meta.sources.map(doc => ({
+                  source: doc.name || doc.id,
+                  page: doc.pages,
+                  link: doc.Link || doc.link
+                }));
+                setMessages(prev =>
+                  prev.map(msg =>
+                    msg.id === aiMessageId
+                      ? { ...msg, references }
+                      : msg
+                  )
+                );
+                return;
+              }
+
               setMessages(prev => 
                 prev.map(msg => 
                   msg.id === aiMessageId 
