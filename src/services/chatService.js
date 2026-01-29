@@ -50,7 +50,7 @@ const getHeaders = () => {
 };
 
 // POST - Iniciar nova conversa
-export const startChat = async (message, courseExternalId = '12345') => {
+export const startChat = async (message, courseExternalId = 'SistemasOperacionais') => {
   try {
     const url = `${API_BASE_URL}/chat`;
     const payload = {
@@ -126,7 +126,15 @@ export const sendChatMessage = async (sessionId, message) => {
 export const getChatStream = async (sessionId, onChunk, onComplete, onError, streamUrl = null) => {
   try {
     // Usa o stream_url fornecido ou constrói o padrão
-    const url = streamUrl || `${API_BASE_URL}/chat/stream/${sessionId}`;
+    const url = streamUrl
+      ? (
+          streamUrl.startsWith('http')
+            ? streamUrl
+            : streamUrl.startsWith('/api/')
+              ? `${API_BASE_URL.replace(/\/api\/?$/, '')}${streamUrl}`
+              : `${API_BASE_URL}${streamUrl}`
+        )
+      : `${API_BASE_URL}/chat/stream/${sessionId}`;
     
     console.log('🌊 Iniciando streaming para sessão:', sessionId);
     console.log('🔗 URL do stream:', url);
@@ -215,6 +223,30 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
 
             if (data.event === 'sources' && Array.isArray(data.documents)) {
               onChunk('', fullText, { sources: data.documents });
+              continue;
+            }
+
+            if (data.event === 'media') {
+              const media = [];
+              if (Array.isArray(data.videos)) {
+                data.videos.forEach((video) => {
+                  media.push({
+                    type: 'video',
+                    title: video.name,
+                    url: video.Link
+                  });
+                });
+              }
+              if (Array.isArray(data.images)) {
+                data.images.forEach((image) => {
+                  media.push({
+                    type: 'image',
+                    url: image.Link,
+                    alt: image.name
+                  });
+                });
+              }
+              onChunk('', fullText, { media });
               continue;
             }
             
@@ -346,35 +378,38 @@ export const renameChat = async (sessionId, title) => {
 // POST - Salvar conversa no histórico
 export const saveChat = async (chatData) => {
   try {
-    console.log('💾 Tentando salvar conversa:', chatData.session_id);
-    
-    const response = await fetch(`${API_BASE_URL}/chat/history`, {
-      method: 'POST',
+    console.log('?? Tentando salvar conversa:', chatData.session_id);
+
+    const url = new URL(`${API_BASE_URL}/chat/history`);
+    if (chatData?.session_id) url.searchParams.set('session_id', chatData.session_id);
+    if (chatData?.title) url.searchParams.set('title', chatData.title);
+
+    const response = await fetch(url.toString(), {
+      method: 'GET',
       headers: getHeaders(),
-      body: JSON.stringify(chatData),
     });
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Erro desconhecido');
-      console.warn(`⚠️ Erro ${response.status} ao salvar conversa:`, errorText);
-      
-      // Se o endpoint não existe (404), não é crítico
+      console.warn(`?? Erro ${response.status} ao salvar conversa:`, errorText);
+
+      // Se o endpoint n?o existe (404), n?o ? cr?tico
       if (response.status === 404) {
-        console.log('⚠️ Endpoint /chat/save não implementado no backend');
-        return { ok: false, message: 'Endpoint não implementado' };
+        console.log('?? Endpoint /chat/save n?o implementado no backend');
+        return { ok: false, message: 'Endpoint n?o implementado' };
       }
-      
+
       throw new Error(`Erro ${response.status}: ${errorText}`);
     }
 
     const data = await response.json();
-    console.log('✅ Conversa salva com sucesso!');
+    console.log('? Conversa salva com sucesso!');
     return data;
   } catch (error) {
-    console.error('❌ Erro ao salvar conversa:', error.message);
-    
-    // Não propaga o erro para não quebrar a aplicação
-    // O salvamento é opcional
+    console.error('? Erro ao salvar conversa:', error.message);
+
+    // N?o propaga o erro para n?o quebrar a aplica??o
+    // O salvamento ? opcional
     return { ok: false, error: error.message };
   }
 };

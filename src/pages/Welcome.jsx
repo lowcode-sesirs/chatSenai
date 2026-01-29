@@ -419,6 +419,17 @@ function Welcome() {
             currentSessionId,
             // onChunk - atualiza a mensagem conforme chega
             (chunk, accumulated, meta) => {
+              if (meta?.media) {
+                setMessages(prev =>
+                  prev.map(msg =>
+                    msg.id === aiMessageId
+                      ? { ...msg, media: meta.media }
+                      : msg
+                  )
+                );
+                return;
+              }
+
               if (meta?.sources) {
                 const references = meta.sources.map(doc => ({
                   source: doc.name || doc.id,

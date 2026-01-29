@@ -168,23 +168,18 @@ function MoodleAuthWrapper({ children }) {
     );
   }
 
-  // Error state
+  // Error state - permite acesso sem bloqueio
   if (!authState.authenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center max-w-md p-8 bg-white rounded-lg shadow-lg">
-          <div className="text-red-500 text-5xl mb-4">🔒</div>
-          <h1 className="text-xl font-bold text-gray-900 mb-2">Acesso Negado</h1>
-          <p className="text-gray-600 mb-4">{authState.error}</p>
-          <p className="text-sm text-gray-500">
-            Se você é um aluno, acesse o chat através da plataforma Moodle.
-          </p>
-        </div>
-      </div>
-    );
+    const guestUser = {
+      userId: 'guest',
+      userName: 'Visitante',
+      fromMoodle: false
+    };
+    storeMoodleUser(guestUser);
+    return children;
   }
 
-  // Authenticated - render children with user context
+// Authenticated - render children with user context
   return children;
 }
 
