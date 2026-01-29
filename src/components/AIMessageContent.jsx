@@ -40,31 +40,28 @@ function AIMessageContent({ message }) {
     if (images.length === 0) return null;
 
     return (
-      <div className="mt-4 space-y-3">
-        {images.map((img, index) => (
-          <div key={index} className="rounded-lg overflow-hidden border border-gray-200">
-            {!imageErrors[index] ? (
-              <img
-                src={img.url}
-                alt={img.alt || 'Imagem do conteúdo'}
-                className="w-full h-auto"
-                onError={() => setImageErrors(prev => ({ ...prev, [index]: true }))}
-              />
-            ) : (
-              <div className="bg-gray-100 p-4 text-center text-gray-500 text-sm">
-                Imagem não disponível
-              </div>
-            )}
-            {img.alt && (
-              <p className="text-xs text-gray-500 p-2 bg-gray-50">{img.alt}</p>
-            )}
-            {img.source && (
-              <p className="text-xs text-gray-500 p-2 bg-gray-50 border-t">
-                📚 Fonte: {img.source}
-              </p>
-            )}
-          </div>
-        ))}
+      <div className="mt-4">
+        <div className="flex flex-col md:flex-row md:flex-wrap gap-3">
+          {images.map((img, index) => (
+            <div key={index} className="rounded-lg overflow-hidden border border-gray-200 w-full md:w-[200px]">
+              {!imageErrors[index] ? (
+                <img
+                  src={img.url}
+                  alt={img.alt || 'Imagem do conteudo'}
+                  className="w-full h-auto"
+                  onError={() => setImageErrors(prev => ({ ...prev, [index]: true }))}
+                />
+              ) : (
+                <div className="bg-gray-100 p-4 text-center text-gray-500 text-sm">
+                  Imagem nao disponivel
+                </div>
+              )}
+              {img.alt && (
+                <p className="text-xs text-gray-500 p-2 bg-gray-50">{img.alt}</p>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     );
   };

@@ -423,7 +423,7 @@ function Welcome() {
                 setMessages(prev =>
                   prev.map(msg =>
                     msg.id === aiMessageId
-                      ? { ...msg, media: meta.media }
+                      ? { ...msg, media: [ ...(msg.media || []), ...meta.media ] }
                       : msg
                   )
                 );
@@ -1079,6 +1079,7 @@ Status: Erro 500 - Problema interno do servidor`;
                   padding: '16px',
                   boxShadow: '0px 0px 12px 0px #C3E9FC80'
                 }}
+                onClick={() => setIsHistoryOpen(true)}
               >
                 <div 
                   className="bg-[#FFEFEA] flex items-center justify-center mb-3" 
@@ -1171,7 +1172,7 @@ Status: Erro 500 - Problema interno do servidor`;
                       </div>
                     </div>
                   ) : (
-                    <div className="w-full md:w-[448px]">
+                    <div className="w-full md:w-full">
                       {/* Caixa da mensagem */}
                       <div 
                         className="bg-white rounded-2xl px-4 md:px-6 py-3 md:py-4"
@@ -1229,7 +1230,7 @@ Status: Erro 500 - Problema interno do servidor`;
                                       height: '12.92px',
                                       display: 'block',
                                       filter: feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
-                                        ? 'brightness(0) saturate(100%) invert(59%) sepia(98%) saturate(1946%) hue-rotate(201deg) brightness(97%) contrast(94%)'
+                                        ? 'brightness(0) saturate(100%) invert(39%) sepia(88%) saturate(3066%) hue-rotate(9deg) brightness(97%) contrast(96%)'
                                         : 'none'
                                     }} 
                                   />

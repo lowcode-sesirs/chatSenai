@@ -50,7 +50,7 @@ const getHeaders = () => {
 };
 
 // POST - Iniciar nova conversa
-export const startChat = async (message, courseExternalId = 'SistemasOperacionais') => {
+export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
   try {
     const url = `${API_BASE_URL}/chat`;
     const payload = {
@@ -59,15 +59,17 @@ export const startChat = async (message, courseExternalId = 'SistemasOperacionai
       language: 'pt-BR', // ✅ Força respostas em português
     };
     
+    const headers = getHeaders();
+
     console.log('🚀 Iniciando chat:', {
       url,
       payload,
-      headers: getHeaders()
+      headers
     });
     
     const response = await fetch(url, {
       method: 'POST',
-      headers: getHeaders(),
+      headers,
       body: JSON.stringify(payload),
     });
 
@@ -89,6 +91,7 @@ export const startChat = async (message, courseExternalId = 'SistemasOperacionai
     }
 
     const data = await response.json();
+
     console.log('✅ Resposta do startChat:', data);
     console.log('📋 Estrutura da resposta:', Object.keys(data));
     return data;
@@ -232,8 +235,8 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
                 data.videos.forEach((video) => {
                   media.push({
                     type: 'video',
-                    title: video.name,
-                    url: video.Link
+                    title: video.name || video.title,
+                    url: video.Link || video.link || video.url
                   });
                 });
               }
@@ -241,8 +244,8 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
                 data.images.forEach((image) => {
                   media.push({
                     type: 'image',
-                    url: image.Link,
-                    alt: image.name
+                    url: image.Link || image.link || image.url,
+                    alt: image.name || image.title
                   });
                 });
               }
@@ -283,13 +286,15 @@ export const getChatHistory = async () => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
+    const url = `${API_BASE_URL}/chat/history`;
+    const headers = {
+      'x-dev-user': getMoodleUserId(),
+    };
     console.log('📡 Buscando histórico de conversas...');
     
-    const response = await fetch(`${API_BASE_URL}/chat/history`, {
+    const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'x-dev-user': getMoodleUserId(),
-      },
+      headers,
       signal: controller.signal,
     });
 
@@ -333,11 +338,15 @@ export const getChatHistory = async () => {
 // GET - Carregar conversa específica
 export const loadChat = async (sessionId) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/chat/history/${sessionId}`, {
+    const url = `${API_BASE_URL}/chat/history/${sessionId}`;
+    const headers = {
+      'x-dev-user': getMoodleUserId(),
+    };
+    console.log('📡 Carregando conversa...', { url, method: 'GET', headers });
+    
+    const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'x-dev-user': X_DEV_USER,
-      },
+      headers,
     });
 
     if (!response.ok) {
@@ -380,11 +389,13 @@ export const saveChat = async (chatData) => {
   try {
     console.log('?? Tentando salvar conversa:', chatData.session_id);
 
-    const url = new URL(`${API_BASE_URL}/chat/history`);
-    if (chatData?.session_id) url.searchParams.set('session_id', chatData.session_id);
-    if (chatData?.title) url.searchParams.set('title', chatData.title);
+    const params = new URLSearchParams();
+    if (chatData?.session_id) params.set('session_id', chatData.session_id);
+    if (chatData?.title) params.set('title', chatData.title);
+    const query = params.toString();
+    const url = `${API_BASE_URL}/chat/history${query ? `?${query}` : ''}`;
 
-    const response = await fetch(url.toString(), {
+    const response = await fetch(url, {
       method: 'GET',
       headers: getHeaders(),
     });
