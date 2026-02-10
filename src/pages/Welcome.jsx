@@ -49,7 +49,7 @@ function Welcome() {
   ]);
   const [feedbackGiven, setFeedbackGiven] = useState({}); // Rastreia feedback dado por messageId
   const [copiedMessages, setCopiedMessages] = useState({}); // Rastreia mensagens copiadas
-  const [deletedChats, setDeletedChats] = useState(new Set()); // Rastreia chats deletados localmente
+  // deletados são tratados pelo backend
   const messagesEndRef = useRef(null);
 
   // Scroll automático para o final quando novas mensagens chegam
@@ -156,22 +156,7 @@ function Welcome() {
           console.log('🔍 Campos disponíveis:', Object.keys(history[0]));
         }
         
-        const currentUser = getMoodleUser();
-        // Filtra chats deletados localmente e por usuario e ordena por data (mais recente primeiro)
-        const filteredHistory = history.filter(chat => {
-          const chatId = chat.id || chat.session_id || chat.chat_id;
-          if (deletedChats.has(chatId)) return false;
-          if (!currentUser) return false;
-          return matchChatToUser(chat, currentUser);
-        });
-
-        const historyHasUserField = history.some(chat =>
-          chat.user_id || chat.userId || chat.user_email || chat.userEmail || chat.user_name || chat.userName || chat.x_dev_user || chat.xDevUser || chat.owner_id || chat.ownerId
-        );
-
-        if (history.length > 0 && filteredHistory.length === 0 && !historyHasUserField) {
-          console.warn('⚠️ Backend sem user_id no /chat/history. Nao e possivel filtrar historico por usuario apenas no frontend.');
-        }
+        const filteredHistory = history;
         
         const sortedHistory = filteredHistory.sort((a, b) => {
           const dateA = new Date(a.updated_at || a.created_at || 0);
@@ -210,10 +195,8 @@ function Welcome() {
 
   // Função para limpar lista de chats deletados (debug/reset)
   const clearDeletedChats = () => {
-    setDeletedChats(new Set());
-    localStorage.removeItem('deletedChats');
-    console.log('🧹 Lista de chats deletados limpa');
-    loadHistory(true); // Recarrega histórico para mostrar todos os chats novamente
+    console.log('🧹 Lista de chats deletados localmente desativada');
+    loadHistory(true);
   };
 
   // Função para formatar tempo relativo (ex: "há 2 minutos", "há 1 hora")
@@ -244,20 +227,7 @@ function Welcome() {
     }
   };
 
-  // Carregar lista de chats deletados do localStorage ao iniciar
-  useEffect(() => {
-    try {
-      const savedDeletedChats = localStorage.getItem('deletedChats');
-      if (savedDeletedChats) {
-        const deletedChatsArray = JSON.parse(savedDeletedChats);
-        setDeletedChats(new Set(deletedChatsArray));
-        console.log('📂 Lista de chats deletados carregada do localStorage:', deletedChatsArray.length, 'itens');
-      }
-    } catch (error) {
-      console.error('❌ Erro ao carregar chats deletados do localStorage:', error);
-      setDeletedChats(new Set());
-    }
-  }, []);
+  // Removido: carregamento de chats deletados do localStorage
 
   // Carregar histórico automaticamente ao iniciar a aplicação (com delay)
   useEffect(() => {
@@ -867,10 +837,7 @@ Status: Erro 500 - Problema interno do servidor`;
   // Função para deletar conversa do histórico
   const handleDeleteChat = async (chat) => {
     const chatId = chat.id || chat.session_id || chat.chat_id;
-    
-    // Adiciona à lista de deletados imediatamente (para persistir mesmo com reload)
-    setDeletedChats(prev => new Set([...prev, chatId]));
-    
+
     // Remove da lista local imediatamente
     setChatHistory(prev => prev.filter(c => 
       (c.id || c.session_id || c.chat_id) !== chatId
@@ -881,15 +848,6 @@ Status: Erro 500 - Problema interno do servidor`;
       handleNewChat();
     }
     
-    // Salva a lista de deletados no localStorage para persistir entre reloads
-    try {
-      const deletedChatsArray = [...deletedChats, chatId];
-      localStorage.setItem('deletedChats', JSON.stringify(deletedChatsArray));
-      console.log('💾 Lista de chats deletados salva no localStorage');
-    } catch (error) {
-      console.error('❌ Erro ao salvar chats deletados no localStorage:', error);
-    }
-    
     // Tenta deletar no backend (se o endpoint existir)
     try {
       console.log('🗑️ Tentando deletar conversa no backend:', chatId);
@@ -897,12 +855,9 @@ Status: Erro 500 - Problema interno do servidor`;
       console.log('✅ Conversa deletada com sucesso no backend!');
     } catch (error) {
       console.log('⚠️ Erro ao deletar no backend (mantendo delete local):', error.message);
-      
-      // Não remove da lista de deletados mesmo se falhar no backend
-      // O delete local já foi feito e será persistido
     }
     
-    console.log('✅ Conversa removida permanentemente da interface');
+    console.log('✅ Conversa removida da interface');
   };
 
   // Função para carregar uma conversa do histórico
