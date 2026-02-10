@@ -17,6 +17,7 @@ import novaConversaIcon from '../assets/novaConversa.png';
 
 function Welcome() {
   const [message, setMessage] = useState('');
+  const [moodleUser, setMoodleUser] = useState(() => getMoodleUser());
   const now = new Date();
   const [chatTitle, setChatTitle] = useState(`Chat ${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -56,6 +57,85 @@ function Welcome() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  useEffect(() => {
+    const updateMoodleUser = () => {
+      setMoodleUser(getMoodleUser());
+    };
+    updateMoodleUser();
+    window.addEventListener('moodle_user_updated', updateMoodleUser);
+    let attempts = 0;
+    const retryLoad = () => {
+      const latest = getMoodleUser();
+      if (latest && (latest.userName || latest.userId || latest.userEmail)) {
+        setMoodleUser(latest);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 6) {
+        setTimeout(retryLoad, 500);
+      }
+    };
+    retryLoad();
+    return () => {
+      window.removeEventListener('moodle_user_updated', updateMoodleUser);
+    };
+  }, []);
+
+  const getDisplayUserName = (user) => {
+    const name =
+      user?.userName ||
+      user?.fullname ||
+      user?.user_name ||
+      user?.username ||
+      user?.name ||
+      (typeof window !== 'undefined' && window.__MOODLE_USER__ &&
+        (window.__MOODLE_USER__.userName ||
+          window.__MOODLE_USER__.fullname ||
+          window.__MOODLE_USER__.user_name ||
+          window.__MOODLE_USER__.username ||
+          window.__MOODLE_USER__.name));
+    if (typeof name === 'string' && name.trim()) return name.trim();
+    if (name) return String(name);
+    return 'Aluno';
+  };
+
+  const matchChatToUser = (chat, user) => {
+    if (!chat || !user) return false;
+    const userId = user.userId ?? user.id ?? null;
+    const userEmail = user.userEmail ?? user.email ?? null;
+    const userName = user.userName ?? user.fullname ?? user.username ?? null;
+
+    const chatFields = [
+      chat.user_id,
+      chat.userId,
+      chat.user,
+      chat.user_email,
+      chat.userEmail,
+      chat.email,
+      chat.user_name,
+      chat.userName,
+      chat.username,
+      chat.x_dev_user,
+      chat.xDevUser,
+      chat.dev_user,
+      chat.devUser,
+      chat.owner_id,
+      chat.ownerId,
+      chat.created_by,
+      chat.createdBy
+    ].filter((value) => value !== undefined && value !== null);
+
+    if (chatFields.length === 0) return false;
+
+    return chatFields.some((value) => {
+      if (userId !== null && String(value) === String(userId)) return true;
+      if (userEmail && String(value).toLowerCase() === String(userEmail).toLowerCase()) return true;
+      if (userName && String(value).toLowerCase() === String(userName).toLowerCase()) return true;
+      return false;
+    });
+  };
+
+
   // Função para carregar histórico (lazy loading)
   const loadHistory = async (forceReload = false) => {
     // Se já carregou e não é reload forçado, não recarrega
@@ -76,11 +156,22 @@ function Welcome() {
           console.log('🔍 Campos disponíveis:', Object.keys(history[0]));
         }
         
-        // Filtra chats deletados localmente e ordena por data (mais recente primeiro)
+        const currentUser = getMoodleUser();
+        // Filtra chats deletados localmente e por usuario e ordena por data (mais recente primeiro)
         const filteredHistory = history.filter(chat => {
           const chatId = chat.id || chat.session_id || chat.chat_id;
-          return !deletedChats.has(chatId);
+          if (deletedChats.has(chatId)) return false;
+          if (!currentUser) return false;
+          return matchChatToUser(chat, currentUser);
         });
+
+        const historyHasUserField = history.some(chat =>
+          chat.user_id || chat.userId || chat.user_email || chat.userEmail || chat.user_name || chat.userName || chat.x_dev_user || chat.xDevUser || chat.owner_id || chat.ownerId
+        );
+
+        if (history.length > 0 && filteredHistory.length === 0 && !historyHasUserField) {
+          console.warn('⚠️ Backend sem user_id no /chat/history. Nao e possivel filtrar historico por usuario apenas no frontend.');
+        }
         
         const sortedHistory = filteredHistory.sort((a, b) => {
           const dateA = new Date(a.updated_at || a.created_at || 0);
@@ -266,11 +357,128 @@ function Welcome() {
     }
     
     // Fallback: data atual
-    const now = new Date();
-    const day = now.getDate().toString().padStart(2, '0');
-    const month = (now.getMonth() + 1).toString().padStart(2, '0');
-    const year = now.getFullYear();
-    return `Chat ${day}/${month}/${year}`;
+  const now = new Date();
+  const day = now.getDate().toString().padStart(2, '0');
+  const month = (now.getMonth() + 1).toString().padStart(2, '0');
+  const year = now.getFullYear();
+  return `Chat ${day}/${month}/${year}`;
+  };
+
+  const extractMessagesFromChatData = (chatData, fallbackChat) => {
+    if (chatData.messages && Array.isArray(chatData.messages)) {
+      return chatData.messages;
+    }
+
+    if (chatData.history && Array.isArray(chatData.history)) {
+      return chatData.history;
+    }
+
+    if (chatData.conversation && Array.isArray(chatData.conversation)) {
+      return chatData.conversation;
+    }
+
+    if (chatData.data && chatData.data.messages && Array.isArray(chatData.data.messages)) {
+      return chatData.data.messages;
+    }
+
+    if (fallbackChat && fallbackChat.messages && Array.isArray(fallbackChat.messages)) {
+      console.log('Usando mensagens do historico como fallback');
+      return fallbackChat.messages;
+    }
+
+    return [];
+  };
+
+  const normalizeMediaUrl = (value) => {
+    if (!value || typeof value !== 'string') return value;
+    let url = value.trim();
+    // Remove aspas no fim ou no começo (incluindo %22)
+    url = url.replace(/^"+|"+$/g, '');
+    url = url.replace(/^%22|%22$/gi, '');
+    return url;
+  };
+
+  const coercePayloadObject = (value) => {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        console.warn('Falha ao parsear payload JSON:', error);
+        return null;
+      }
+    }
+    return value;
+  };
+
+  const formatMessagesForUI = (messagesToLoad) => {
+    return messagesToLoad.map((msg, index) => {
+      let messageType = 'ai';
+      if (msg.type) {
+        messageType = msg.type;
+      } else if (msg.sender) {
+        messageType = msg.sender;
+      } else if (msg.role) {
+        messageType = msg.role === 'user' ? 'user' : 'ai';
+      } else if (msg.is_user || msg.isUser) {
+        messageType = 'user';
+      }
+
+      const messageText = msg.text || msg.content || msg.message || msg.response || '';
+      const sourcesPayload = coercePayloadObject(
+        msg.sources_payload || msg.sourcesPayload || msg.sources
+      );
+      const mediaPayload = coercePayloadObject(
+        msg.media_payload || msg.mediaPayload || msg.media_payloads || msg.mediaPayloads || msg.media
+      );
+
+      let references = Array.isArray(msg.references) ? msg.references : null;
+      if (!references && sourcesPayload && Array.isArray(sourcesPayload.documents)) {
+        references = sourcesPayload.documents.map(doc => ({
+          source: doc.name || doc.id,
+          page: doc.pages,
+          link: normalizeMediaUrl(doc.Link || doc.link)
+        }));
+      }
+
+      let media = Array.isArray(msg.media) ? msg.media : null;
+      if (!media && mediaPayload) {
+        const collected = [];
+        if (Array.isArray(mediaPayload.videos)) {
+          mediaPayload.videos.forEach((video) => {
+            collected.push({
+              type: 'video',
+              title: video.name || video.title,
+              url: normalizeMediaUrl(video.Link || video.link || video.url),
+              source: video.source
+            });
+          });
+        }
+        if (Array.isArray(mediaPayload.images)) {
+          mediaPayload.images.forEach((image) => {
+            collected.push({
+              type: 'image',
+              url: normalizeMediaUrl(image.Link || image.link || image.url),
+              alt: image.name || image.title
+            });
+          });
+        }
+        if (collected.length > 0) {
+          media = collected;
+        }
+      }
+
+      return {
+        id: index + 1,
+        type: messageType,
+        text: messageText,
+        timestamp: new Date(msg.timestamp || msg.created_at || msg.date || Date.now()),
+        messageId: msg.id || msg.message_id || `msg-${index}`,
+        isWelcome: index === 0 && messageType === 'ai',
+        references,
+        media
+      };
+    });
   };
 
   // Função para salvar conversa automaticamente
@@ -712,64 +920,36 @@ Status: Erro 500 - Problema interno do servidor`;
       
       // Carrega a conversa completa da API
       console.log('📡 Buscando conversa completa da API:', chatId);
-      const chatData = await loadChat(chatId);
+        const chatData = await loadChat(chatId);
+        
+        if (!chatData) {
+          console.log('⚠️ Conversa não encontrada no backend, iniciando nova.');
+          localStorage.removeItem('activeChatId');
+          setMessages([
+            {
+              id: 1,
+              type: 'ai',
+              text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+              isWelcome: true,
+              timestamp: new Date(),
+              messageId: 'welcome-msg'
+            }
+          ]);
+          setIsHistoryOpen(false);
+          return;
+        }
+
+        console.log('📦 Dados da conversa carregados:', chatData);
       
-      console.log('📦 Dados da conversa carregados:', chatData);
-      
-      // Extrai mensagens da resposta da API
-      let messagesToLoad = [];
-      
-      // Formato 1: chatData.messages (array direto)
-      if (chatData.messages && Array.isArray(chatData.messages)) {
-        messagesToLoad = chatData.messages;
-      }
-      // Formato 2: chatData.history (array de mensagens)
-      else if (chatData.history && Array.isArray(chatData.history)) {
-        messagesToLoad = chatData.history;
-      }
-      // Formato 3: chatData.conversation (array de mensagens)
-      else if (chatData.conversation && Array.isArray(chatData.conversation)) {
-        messagesToLoad = chatData.conversation;
-      }
-      // Formato 4: chatData.data.messages
-      else if (chatData.data && chatData.data.messages && Array.isArray(chatData.data.messages)) {
-        messagesToLoad = chatData.data.messages;
-      }
-      // Fallback: usar dados do histórico se API não retornar mensagens
-      else if (chat.messages && Array.isArray(chat.messages)) {
-        messagesToLoad = chat.messages;
-        console.log('⚠️ Usando mensagens do histórico como fallback');
-      }
-      
+      const messagesToLoad = extractMessagesFromChatData(chatData, chat);
+
+
       console.log('📝 Mensagens encontradas:', messagesToLoad);
       
       if (messagesToLoad.length > 0) {
-        const formattedMessages = messagesToLoad.map((msg, index) => {
-          // Determina o tipo da mensagem
-          let messageType = 'ai';
-          if (msg.type) {
-            messageType = msg.type;
-          } else if (msg.sender) {
-            messageType = msg.sender;
-          } else if (msg.role) {
-            messageType = msg.role === 'user' ? 'user' : 'ai';
-          } else if (msg.is_user || msg.isUser) {
-            messageType = 'user';
-          }
-          
-          // Extrai o texto da mensagem
-          const messageText = msg.text || msg.content || msg.message || msg.response || '';
-          
-          return {
-            id: index + 1,
-            type: messageType,
-            text: messageText,
-            timestamp: new Date(msg.timestamp || msg.created_at || msg.date || Date.now()),
-            messageId: msg.id || msg.message_id || `msg-${index}`,
-            isWelcome: index === 0 && messageType === 'ai'
-          };
-        });
-        
+        const formattedMessages = formatMessagesForUI(messagesToLoad);
+
+
         console.log('✅ Mensagens formatadas:', formattedMessages);
         setMessages(formattedMessages);
       } else {
@@ -817,6 +997,96 @@ Status: Erro 500 - Problema interno do servidor`;
     setIsHistoryOpen(false);
   };
 
+  useEffect(() => {
+    let ignore = false;
+    const restoreActiveChat = async () => {
+      let storedChatId = null;
+        try {
+          const urlParams = new URLSearchParams(window.location.search);
+          storedChatId =
+            urlParams.get('active_chat_id') ||
+            urlParams.get('session_id') ||
+            urlParams.get('sid') ||
+            urlParams.get('chat_id');
+          if (storedChatId) {
+            localStorage.setItem('activeChatId', storedChatId);
+          }
+        } catch (error) {
+          console.warn('Falha ao ler active_chat_id da URL:', error);
+        }
+
+      try {
+        if (!storedChatId) {
+          storedChatId = localStorage.getItem('activeChatId');
+        }
+      } catch (error) {
+        console.warn('Falha ao ler activeChatId do localStorage:', error);
+        return;
+      }
+
+      if (!storedChatId) return;
+      if (storedChatId === currentChatId || storedChatId === sessionId) return;
+
+      try {
+        console.log('Tentando restaurar chat ativo do storage:', storedChatId);
+        const history = await getChatHistory();
+        if (ignore) return;
+
+        if (Array.isArray(history)) {
+          const match = history.find((chat) => {
+            const chatId = chat.id || chat.session_id || chat.chat_id;
+            return chatId === storedChatId;
+          });
+
+          if (match) {
+            await handleLoadChat(match);
+            return;
+          }
+        }
+
+        console.log('Chat nao encontrado no historico, carregando direto pela API.');
+          const chatData = await loadChat(storedChatId);
+          if (ignore) return;
+
+          if (!chatData) {
+            console.log('Chat inexistente no backend, limpando activeChatId.');
+            localStorage.removeItem('activeChatId');
+            return;
+          }
+
+          const messagesToLoad = extractMessagesFromChatData(chatData, null);
+        setCurrentChatId(storedChatId);
+        setSessionId(storedChatId);
+        setChatTitle(generateCorrectTitle(chatData));
+
+        if (messagesToLoad.length > 0) {
+          setMessages(formatMessagesForUI(messagesToLoad));
+        } else {
+          setMessages([
+            {
+              id: 1,
+              type: 'ai',
+              text: 'OlÃ¡! Eu sou a SEN.AI, sua parceira de estudo.',
+              isWelcome: true,
+              timestamp: new Date(),
+              messageId: 'welcome-msg'
+            }
+          ]);
+        }
+
+        setFeedbackGiven({});
+        setCopiedMessages({});
+      } catch (error) {
+        console.error('Erro ao restaurar chat ativo:', error);
+      }
+    };
+
+    restoreActiveChat();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
   const handleNewChat = () => {
     // A nova API salva automaticamente, então só precisamos limpar a interface
     console.log('🆕 Iniciando nova conversa...');
@@ -855,6 +1125,31 @@ Status: Erro 500 - Problema interno do servidor`;
   const handleTitleEdit = () => {
     setIsEditingTitle(true);
   };
+
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    if (!hasUserMessages) return;
+
+    const activeChatId = currentChatId || sessionId;
+    if (!activeChatId) return;
+
+    try {
+      localStorage.setItem('activeChatId', activeChatId);
+    } catch (error) {
+      console.warn('Falha ao salvar activeChatId no localStorage:', error);
+    }
+
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(
+          { type: 'senai_active_chat', chatId: activeChatId },
+          '*'
+        );
+      }
+    } catch (error) {
+      console.warn('Falha ao enviar activeChatId via postMessage:', error);
+    }
+  }, [messages, currentChatId, sessionId]);
 
   const handleTitleChange = (e) => {
     setChatTitle(e.target.value);
@@ -992,7 +1287,7 @@ Status: Erro 500 - Problema interno do servidor`;
                 <User size={18} className="text-[#BAD4FF]" />
               </div>
               <div className="text-left">
-                <p className="text-sm font-medium text-gray-700">{getMoodleUser()?.userName || 'Aluno'}</p>
+                <p className="text-sm font-medium text-gray-700">{getDisplayUserName(moodleUser)}</p>
                 <p className="text-xs text-[#EF5E31] cursor-pointer hover:text-[#d54d25]">Sair</p>
               </div>
             </div>
@@ -1148,7 +1443,7 @@ Status: Erro 500 - Problema interno do servidor`;
                       >
                         {/* Header com Nome do aluno */}
                         <div className="mb-3 pb-3 border-b border-gray-200">
-                          <span className="text-[#003d7a] font-bold text-sm">{getMoodleUser()?.userName || 'Aluno'}</span>
+                          <span className="text-[#003d7a] font-bold text-sm">{getDisplayUserName(moodleUser)}</span>
                           <span className="text-gray-400 text-sm"> · {formatRelativeTime(msg.timestamp)}</span>
                         </div>
                         

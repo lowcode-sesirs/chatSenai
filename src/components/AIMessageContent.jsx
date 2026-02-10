@@ -40,17 +40,25 @@ function AIMessageContent({ message }) {
     if (images.length === 0) return null;
 
     return (
-      <div className="mt-4">
+      <div className="mt-4 space-y-2">
+        <p className="text-sm font-medium text-gray-700">Imagens relacionadas:</p>
         <div className="flex flex-col md:flex-row md:flex-wrap gap-3">
           {images.map((img, index) => (
             <div key={index} className="rounded-lg overflow-hidden border border-gray-200 w-full md:w-[200px]">
               {!imageErrors[index] ? (
-                <img
-                  src={img.url}
-                  alt={img.alt || 'Imagem do conteudo'}
-                  className="w-full h-auto"
-                  onError={() => setImageErrors(prev => ({ ...prev, [index]: true }))}
-                />
+                <a
+                  href={img.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block"
+                >
+                  <img
+                    src={img.url}
+                    alt={img.alt || 'Imagem do conteudo'}
+                    className="w-full h-auto cursor-pointer"
+                    onError={() => setImageErrors(prev => ({ ...prev, [index]: true }))}
+                  />
+                </a>
               ) : (
                 <div className="bg-gray-100 p-4 text-center text-gray-500 text-sm">
                   Imagem nao disponivel

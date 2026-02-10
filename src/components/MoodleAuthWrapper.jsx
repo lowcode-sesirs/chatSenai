@@ -3,6 +3,7 @@ import {
   getMoodleTokenFromURL,
   validateMoodleSession,
   isFromMoodle,
+  decodeMoodleToken,
   storeMoodleUser,
   getMoodleUser
 } from '../services/moodleAuthService';
@@ -26,15 +27,18 @@ function MoodleAuthWrapper({ children }) {
         
         // Verifica se já tem usuário autenticado na sessão
         const existingUser = getMoodleUser();
-        if (existingUser) {
-          console.log('✅ Usuário já autenticado encontrado:', existingUser);
-          setAuthState({
-            loading: false,
-            authenticated: true,
-            user: existingUser,
-            error: null
-          });
-          return;
+        if (existingUser && (existingUser.userId || existingUser.userName || existingUser.userEmail)) {
+          const isGuest = existingUser.userId === 'guest' || existingUser.fromMoodle === false;
+          if (!isGuest || (window.__MOODLE_USER__ && window.__MOODLE_USER__.userId)) {
+            console.log('✅ Usuário já autenticado encontrado:', existingUser);
+            setAuthState({
+              loading: false,
+              authenticated: true,
+              user: existingUser,
+              error: null
+            });
+            return;
+          }
         }
 
         // Verifica o modo de desenvolvimento primeiro
@@ -100,13 +104,25 @@ function MoodleAuthWrapper({ children }) {
             url.searchParams.delete('token');
             window.history.replaceState({}, '', url);
           } else {
-            console.error('❌ Falha na validação:', result.error);
-            setAuthState({
-              loading: false,
-              authenticated: false,
-              user: null,
-              error: result.error || 'Sessão inválida'
-            });
+            const decodedUser = decodeMoodleToken(token);
+            if (decodedUser && decodedUser.userId) {
+              console.warn('⚠️ Validação falhou, usando dados do token localmente.');
+              storeMoodleUser(decodedUser);
+              setAuthState({
+                loading: false,
+                authenticated: true,
+                user: decodedUser,
+                error: null
+              });
+            } else {
+              console.error('❌ Falha na validação:', result.error);
+              setAuthState({
+                loading: false,
+                authenticated: false,
+                user: null,
+                error: result.error || 'Sessão inválida'
+              });
+            }
           }
         } else {
           // Em produção sem token Moodle
@@ -156,6 +172,47 @@ function MoodleAuthWrapper({ children }) {
     return () => clearTimeout(timeoutId);
   }, []);
 
+  useEffect(() => {
+    const handleMessage = (event) => {
+      const data = event?.data;
+      if (!data) return;
+      if (data.type === 'senai_moodle_user' && data.payload) {
+        storeMoodleUser(data.payload);
+        setAuthState((prev) => ({
+          ...prev,
+          loading: false,
+          authenticated: true,
+          user: data.payload,
+          error: null
+        }));
+        return;
+      }
+      if (data.userId || data.userName || data.userEmail) {
+        storeMoodleUser(data);
+        setAuthState((prev) => ({
+          ...prev,
+          loading: false,
+          authenticated: true,
+          user: data,
+          error: null
+        }));
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
+      }
+    } catch (error) {
+      console.warn('Falha ao solicitar moodle_user via postMessage:', error);
+    }
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+    };
+  }, []);
+
   // Loading state
   if (authState.loading) {
     return (
@@ -170,12 +227,26 @@ function MoodleAuthWrapper({ children }) {
 
   // Error state - permite acesso sem bloqueio
   if (!authState.authenticated) {
-    const guestUser = {
-      userId: 'guest',
-      userName: 'Visitante',
-      fromMoodle: false
-    };
-    storeMoodleUser(guestUser);
+    const { token } = getMoodleTokenFromURL();
+    const existingUser = getMoodleUser();
+    if (
+      (existingUser &&
+        (existingUser.userId || existingUser.userName || existingUser.userEmail) &&
+        existingUser.userId !== 'guest') ||
+      token
+    ) {
+      return children;
+    }
+
+    const shouldSetGuest = !(window.parent && window.parent !== window);
+    if (shouldSetGuest) {
+      const guestUser = {
+        userId: 'guest',
+        userName: 'Visitante',
+        fromMoodle: false
+      };
+      storeMoodleUser(guestUser);
+    }
     return children;
   }
 

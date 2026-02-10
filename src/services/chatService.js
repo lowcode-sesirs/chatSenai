@@ -27,10 +27,37 @@ console.log('🔧 Configuração da API:', {
 // Função para obter o user_id do Moodle (se disponível)
 const getMoodleUserId = () => {
   try {
+    if (typeof window !== 'undefined') {
+      const runtimeUser = window.__MOODLE_USER__;
+      const runtimeEmail = runtimeUser?.userEmail || runtimeUser?.email;
+      if (runtimeEmail) return runtimeEmail;
+      const runtimeId = runtimeUser?.userId || runtimeUser?.userid || runtimeUser?.user_id || runtimeUser?.id;
+      if (runtimeId && runtimeId !== 'guest') {
+        return runtimeId;
+      }
+    }
+
     const moodleUser = sessionStorage.getItem('moodle_user');
     if (moodleUser) {
       const userData = JSON.parse(moodleUser);
-      return userData.userId || X_DEV_USER;
+      if (userData?.userEmail) {
+        return userData.userEmail;
+      }
+      if (userData?.userId && userData.userId !== 'guest') {
+        return userData.userId;
+      }
+    }
+
+    const moodleUserFromLocal = localStorage.getItem('moodle_user');
+    if (moodleUserFromLocal) {
+      sessionStorage.setItem('moodle_user', moodleUserFromLocal);
+      const userData = JSON.parse(moodleUserFromLocal);
+      if (userData?.userEmail) {
+        return userData.userEmail;
+      }
+      if (userData?.userId && userData.userId !== 'guest') {
+        return userData.userId;
+      }
     }
   } catch (e) {
     console.warn('Erro ao obter user_id do Moodle:', e);
@@ -40,10 +67,18 @@ const getMoodleUserId = () => {
 
 // Header padrão - usa user_id do Moodle se disponível
 const getHeaders = () => {
-  const userId = getMoodleUserId();
+  let userId = getMoodleUserId();
+  if (userId === 'SEU_VALOR_AQUI' || userId === '{{x-dev-user}}' || userId === 'undefined') {
+    const runtimeUser = typeof window !== 'undefined' ? window.__MOODLE_USER__ : null;
+    const runtimeId = runtimeUser?.userId || runtimeUser?.userid || runtimeUser?.user_id || runtimeUser?.id;
+    if (runtimeId) {
+      userId = runtimeId;
+    }
+  }
   const headers = {
     'Content-Type': 'application/json',
-    'x-dev-user': userId
+    'x-dev-user': userId,
+    'moodle_user_id': userId
   };
   console.log('🔧 Headers sendo enviados:', headers);
   return headers;
@@ -350,6 +385,10 @@ export const loadChat = async (sessionId) => {
     });
 
     if (!response.ok) {
+      if (response.status === 404) {
+        console.warn('⚠️ Conversa não encontrada (404):', sessionId);
+        return null;
+      }
       throw new Error('Erro ao carregar conversa');
     }
 
