@@ -22,6 +22,7 @@ function Welcome() {
   const [chatTitle, setChatTitle] = useState(`Chat ${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingTitleRename, setPendingTitleRename] = useState(false);
   // Função para gerar UUID v4 válido
   const generateUUID = () => {
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -553,6 +554,16 @@ function Welcome() {
           
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
+
+          if (pendingTitleRename && chatTitle) {
+            try {
+              console.log('📝 Aplicando título pendente:', chatTitle);
+              await renameChat(currentSessionId, chatTitle);
+              setPendingTitleRename(false);
+            } catch (error) {
+              console.warn('⚠️ Falha ao aplicar título pendente:', error.message);
+            }
+          }
           
           // ✅ Atualiza histórico imediatamente após iniciar nova conversa
           console.log('🔄 Atualizando histórico após nova conversa...');
@@ -1129,6 +1140,9 @@ Status: Erro 500 - Problema interno do servidor`;
       } catch (error) {
         console.error('❌ Erro ao salvar título:', error);
       }
+    } else {
+      // Sem mensagens ainda: agenda para renomear após a primeira pergunta
+      setPendingTitleRename(true);
     }
   };
 
