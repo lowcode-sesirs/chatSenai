@@ -27,6 +27,7 @@ export const decodeMoodleToken = (token) => {
       userId: data.userid || data.user_id || data.id,
       userName: data.fullname || data.user_name || data.username,
       userEmail: data.email,
+      isAdmin: data.is_admin || data.isAdmin || data.admin || false,
       fromMoodle: true,
       tokenDecoded: true
     };
@@ -85,7 +86,8 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
       ok: data.ok || data.valid,
       userId: data.user_id,
       userName: data.user_name,
-      userEmail: data.user_email
+      userEmail: data.user_email,
+      isAdmin: data.is_admin || data.isAdmin || false
     };
   } catch (error) {
     console.error('❌ Erro ao validar sessão Moodle:', error);
@@ -113,6 +115,7 @@ export const storeMoodleUser = (userData) => {
     userId: userData.userId || userData.userid || userData.user_id || userData.id || null,
     userName: userData.userName || userData.fullname || userData.user_name || userData.username || userData.name || null,
     userEmail: userData.userEmail || userData.email || null,
+    isAdmin: !!(userData.isAdmin || userData.is_admin || userData.admin),
     fromMoodle: userData.fromMoodle !== undefined ? userData.fromMoodle : true
   };
 
@@ -147,6 +150,7 @@ export const getMoodleUser = () => {
       userId: runtimeUser.userId || runtimeUser.userid || runtimeUser.user_id || runtimeUser.id || null,
       userName: runtimeUser.userName || runtimeUser.fullname || runtimeUser.user_name || runtimeUser.username || runtimeUser.name || null,
       userEmail: runtimeUser.userEmail || runtimeUser.email || null,
+      isAdmin: !!(runtimeUser.isAdmin || runtimeUser.is_admin || runtimeUser.admin),
       fromMoodle: runtimeUser.fromMoodle !== undefined ? runtimeUser.fromMoodle : true
     };
     if (normalizedUser.userId || normalizedUser.userName || normalizedUser.userEmail) {

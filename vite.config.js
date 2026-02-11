@@ -1,12 +1,12 @@
-import { defineConfig } from "vite"
+﻿import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
 import path from "path"
 
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
 
-  // ✅ Base URL: "/" para Firebase, "/local/teste_dev/react/" para Moodle
-  base: mode === 'development' ? '/' : '/',
+  // âœ… Base URL: "/" para Firebase, "/local/teste_dev/react/" para Moodle
+  base: mode === 'development' ? '/' : './',
 
   resolve: {
     alias: {
@@ -14,7 +14,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
 
-  // ✅ Build para Firebase (dist) ou Moodle dependendo do comando
+  // âœ… Build para Firebase (dist) ou Moodle dependendo do comando
   build: {
     manifest: true,
     emptyOutDir: true,
@@ -29,16 +29,17 @@ export default defineConfig(({ mode }) => ({
         secure: true,
         configure: (proxy, _options) => {
           proxy.on("error", (err, _req, _res) => {
-            console.log("❌ Proxy error:", err.message)
+            console.log("âŒ Proxy error:", err.message)
           })
           proxy.on("proxyReq", (proxyReq, req, _res) => {
-            console.log("📤 Proxy request:", req.method, req.url)
+            console.log("ðŸ“¤ Proxy request:", req.method, req.url)
           })
           proxy.on("proxyRes", (proxyRes, req, _res) => {
-            console.log("📥 Proxy response:", proxyRes.statusCode, req.url)
+            console.log("ðŸ“¥ Proxy response:", proxyRes.statusCode, req.url)
           })
         },
       },
     },
   },
 }))
+

@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
-import { Pencil, User, Square } from 'lucide-react';
+﻿import { useState, useEffect, useRef } from 'react';
+import { Pencil, Square } from 'lucide-react';
 import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
 import { getMoodleUser } from '../services/moodleAuthService';
 import AIMessageContent from '../components/AIMessageContent';
@@ -7,7 +7,7 @@ import HistorySidebar from '../components/HistorySidebar';
 import historicoIcon from '../assets/historico.png';
 import questionIcon from '../assets/question.png';
 import fiergsSenaiLogo from '../assets/senai.png';
-import vectorLogo from '../assets/historicoCard.png';
+import vectorLogo from '../assets/button-cursor.svg';
 import ultimasConversas from '../assets/Vector.png';
 import likeIcon from '../assets/like.png';
 import dislikeIcon from '../assets/thumb_down_alt.png';
@@ -38,6 +38,7 @@ function Welcome() {
   const [chatHistory, setChatHistory] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -55,6 +56,8 @@ function Welcome() {
 
   // Scroll automático para o final quando novas mensagens chegam
   useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    if (!hasUserMessages) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -144,17 +147,17 @@ function Welcome() {
     
     setIsLoadingHistory(true);
     try {
-      console.log('🔄 Carregando histórico de conversas...');
+      console.log('ðŸ”„ Carregando histórico de conversas...');
       const history = await getChatHistory();
       
       // Verifica se recebeu dados válidos
       if (Array.isArray(history)) {
-        console.log('📚 Histórico carregado da API:', history.length, 'conversas');
+        console.log('ðŸ“š Histórico carregado da API:', history.length, 'conversas');
         
         // Debug: Verificar estrutura de cada chat (apenas se tiver dados)
         if (history.length > 0) {
-          console.log('🔍 Estrutura do primeiro chat:', history[0]);
-          console.log('🔍 Campos disponíveis:', Object.keys(history[0]));
+          console.log('ðŸ” Estrutura do primeiro chat:', history[0]);
+          console.log('ðŸ” Campos disponíveis:', Object.keys(history[0]));
         }
         
         const filteredHistory = history;
@@ -167,14 +170,14 @@ function Welcome() {
         
         setChatHistory(sortedHistory);
         setHistoryLoaded(true);
-        console.log('✅ Histórico carregado e ordenado com sucesso!');
+        console.log('âœ… Histórico carregado e ordenado com sucesso!');
       } else {
-        console.log('⚠️ Histórico retornado não é um array, usando array vazio');
+        console.log('âš ï¸ Histórico retornado não é um array, usando array vazio');
         setChatHistory([]);
         setHistoryLoaded(true);
       }
     } catch (error) {
-      console.error('❌ Erro ao carregar histórico:', error.message);
+      console.error('âŒ Erro ao carregar histórico:', error.message);
       
       // Define histórico vazio em caso de erro
       setChatHistory([]);
@@ -183,7 +186,7 @@ function Welcome() {
       setHistoryLoaded(true);
       
       // Log adicional para debug
-      console.log('🔄 Histórico definido como vazio devido ao erro');
+      console.log('ðŸ”„ Histórico definido como vazio devido ao erro');
     } finally {
       setIsLoadingHistory(false);
     }
@@ -196,7 +199,7 @@ function Welcome() {
 
   // Função para limpar lista de chats deletados (debug/reset)
   const clearDeletedChats = () => {
-    console.log('🧹 Lista de chats deletados localmente desativada');
+    console.log('ðŸ§¹ Lista de chats deletados localmente desativada');
     loadHistory(true);
   };
 
@@ -308,7 +311,7 @@ function Welcome() {
           // Não é formato de data padrão, é título editado
           return chat.title;
         }
-        // É formato de data padrão, continua para gerar pela data real
+        // Ã‰ formato de data padrão, continua para gerar pela data real
       } else {
         // Não começa com "Chat ", é título editado
         return chat.title;
@@ -461,27 +464,27 @@ function Welcome() {
 
       const chatData = {
         session_id: sessionId,
-        title: chatTitle, // ✅ Sempre usa o título atual (padrão ou editado)
+        title: chatTitle, // âœ… Sempre usa o título atual (padrão ou editado)
         messages: messages.filter(msg => !msg.isWelcome), // Remove mensagem de boas-vindas
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
 
-      console.log('💾 Salvando conversa automaticamente:', chatData);
-      console.log('📝 Título sendo salvo:', chatTitle);
+      console.log('ðŸ’¾ Salvando conversa automaticamente:', chatData);
+      console.log('ðŸ“ Título sendo salvo:', chatTitle);
       
       const result = await saveChat(chatData);
       
       // Verifica se salvou com sucesso (não retornou ok: false)
       if (result && result.ok === false) {
-        console.log('⚠️ Salvamento não disponível (endpoint não implementado)');
+        console.log('âš ï¸ Salvamento não disponível (endpoint não implementado)');
       } else if (result) {
-        console.log('✅ Conversa salva com sucesso!');
+        console.log('âœ… Conversa salva com sucesso!');
         // Força recarregamento do histórico na próxima abertura
         setHistoryLoaded(false);
       }
     } catch (error) {
-      console.warn('⚠️ Não foi possível salvar conversa:', error.message);
+      console.warn('âš ï¸ Não foi possível salvar conversa:', error.message);
       // Não é crítico, continua funcionando normalmente
     }
   };
@@ -541,14 +544,14 @@ function Welcome() {
         
         // Se é a primeira mensagem (apenas mensagem de boas-vindas), inicia nova conversa
         if (messages.length === 1) {
-          console.log('🆕 Iniciando nova conversa...');
+          console.log('ðŸ†• Iniciando nova conversa...');
           const chatResponse = await startChat(userMessageText);
           currentSessionId = chatResponse.session_id;
           aiResponse = chatResponse.response || chatResponse.message || chatResponse.answer || chatResponse.text;
           
           // Pega o stream_url se disponível
           if (chatResponse.stream_url) {
-            console.log('🔗 Stream URL fornecida pelo backend:', chatResponse.stream_url);
+            console.log('ðŸ”— Stream URL fornecida pelo backend:', chatResponse.stream_url);
             streamUrl = chatResponse.stream_url;
           }
           
@@ -557,38 +560,38 @@ function Welcome() {
 
           if (pendingTitleRename && chatTitle) {
             try {
-              console.log('📝 Aplicando título pendente:', chatTitle);
+              console.log('ðŸ“ Aplicando título pendente:', chatTitle);
               await renameChat(currentSessionId, chatTitle);
               setPendingTitleRename(false);
             } catch (error) {
-              console.warn('⚠️ Falha ao aplicar título pendente:', error.message);
+              console.warn('âš ï¸ Falha ao aplicar título pendente:', error.message);
             }
           }
           
-          // ✅ Atualiza histórico imediatamente após iniciar nova conversa
-          console.log('🔄 Atualizando histórico após nova conversa...');
+          // âœ… Atualiza histórico imediatamente após iniciar nova conversa
+          console.log('ðŸ”„ Atualizando histórico após nova conversa...');
           loadHistory(true);
           
-          console.log('✅ Nova conversa iniciada:', currentSessionId);
-          console.log('📝 Resposta da IA:', aiResponse);
+          console.log('âœ… Nova conversa iniciada:', currentSessionId);
+          console.log('ðŸ“ Resposta da IA:', aiResponse);
         } else {
           // Mensagens seguintes: envia mensagem na conversa existente
-          console.log('💬 Enviando mensagem na conversa:', currentSessionId);
+          console.log('ðŸ’¬ Enviando mensagem na conversa:', currentSessionId);
           const messageResponse = await sendChatMessage(currentSessionId, userMessageText);
           aiResponse = messageResponse.response || messageResponse.message || messageResponse.answer || messageResponse.text;
           
           // Pega o stream_url se disponível
           if (messageResponse.stream_url) {
-            console.log('🔗 Stream URL fornecida pelo backend:', messageResponse.stream_url);
+            console.log('ðŸ”— Stream URL fornecida pelo backend:', messageResponse.stream_url);
             streamUrl = messageResponse.stream_url;
           }
           
-          console.log('📝 Resposta da IA:', aiResponse);
+          console.log('ðŸ“ Resposta da IA:', aiResponse);
         }
         
         // Se temos resposta direta, usa ela
         if (aiResponse) {
-          console.log('✅ Usando resposta direta do backend');
+          console.log('âœ… Usando resposta direta do backend');
           setMessages(prev => 
             prev.map(msg => 
               msg.id === aiMessageId 
@@ -598,12 +601,12 @@ function Welcome() {
           );
           setIsLoading(false);
           
-          // ✅ Atualiza o histórico
-          console.log('🔄 Atualizando histórico após nova mensagem...');
+          // âœ… Atualiza o histórico
+          console.log('ðŸ”„ Atualizando histórico após nova mensagem...');
           loadHistory(true);
         } else {
           // Fallback: tenta streaming (caso o backend suporte)
-          console.log('⚠️ Resposta não encontrada, tentando streaming...');
+          console.log('âš ï¸ Resposta não encontrada, tentando streaming...');
           await getChatStream(
             currentSessionId,
             // onChunk - atualiza a mensagem conforme chega
@@ -654,15 +657,15 @@ function Welcome() {
               );
               setIsLoading(false);
               
-              // ✅ Atualiza o histórico
-              console.log('🔄 Atualizando histórico após nova mensagem...');
+              // âœ… Atualiza o histórico
+              console.log('ðŸ”„ Atualizando histórico após nova mensagem...');
               loadHistory(true);
               
-              console.log('✅ Mensagem processada com sucesso!');
+              console.log('âœ… Mensagem processada com sucesso!');
             },
             // onError - trata erros
             (error) => {
-              console.error('❌ Erro no streaming:', error);
+              console.error('âŒ Erro no streaming:', error);
               setMessages(prev => 
                 prev.map(msg => 
                   msg.id === aiMessageId 
@@ -682,7 +685,7 @@ function Welcome() {
         }
         
       } catch (error) {
-        console.error('❌ Erro ao enviar mensagem:', error);
+        console.error('âŒ Erro ao enviar mensagem:', error);
         
         // Detecta se é erro 500 (problema no servidor)
         const isServerError = error.message.includes('500') || error.message.includes('Servidor com problema');
@@ -690,17 +693,17 @@ function Welcome() {
         let errorMessage = 'Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.';
         
         if (isServerError) {
-          errorMessage = `🔧 Sistema Temporariamente Indisponível
+          errorMessage = `ðŸ”§ Sistema Temporariamente Indisponível
 
 O servidor está passando por instabilidade técnica.
 
-📋 O que você pode fazer:
+ðŸ“‹ O que você pode fazer:
 • Aguardar alguns minutos e tentar novamente
 • Consultar as apostilas oficiais do curso
 • Anotar suas dúvidas para perguntar depois
 
 ⏰ Tente novamente em alguns minutos
-🔧 Nossa equipe técnica foi notificada automaticamente
+ðŸ”§ Nossa equipe técnica foi notificada automaticamente
 
 Status: Erro 500 - Problema interno do servidor`;
         }
@@ -728,13 +731,13 @@ Status: Erro 500 - Problema interno do servidor`;
     
     // Se já está enviando, não permite novo clique
     if (currentFeedback?.status === 'sending') {
-      console.log('⚠️ Feedback sendo enviado, aguarde...');
+      console.log('âš ï¸ Feedback sendo enviado, aguarde...');
       return;
     }
     
     // Se clicou no mesmo botão que já está selecionado, não faz nada
     if (currentFeedback?.type === feedbackType && currentFeedback?.status === 'sent') {
-      console.log(`⚠️ ${feedbackType} já foi dado para esta mensagem`);
+      console.log(`âš ï¸ ${feedbackType} já foi dado para esta mensagem`);
       return;
     }
 
@@ -758,14 +761,14 @@ Status: Erro 500 - Problema interno do servidor`;
       if (!isValidUUID(sessionId)) {
         validSessionId = generateUUID();
         setSessionId(validSessionId);
-        console.warn(`⚠️ Session ID "${sessionId}" não é UUID válido, gerando novo: ${validSessionId}`);
+        console.warn(`âš ï¸ Session ID "${sessionId}" não é UUID válido, gerando novo: ${validSessionId}`);
       }
       
-      console.log(`📝 Tentando enviar feedback ${feedbackType} para mensagem:`, messageId);
-      console.log(`📝 Session ID válido:`, validSessionId);
+      console.log(`ðŸ“ Tentando enviar feedback ${feedbackType} para mensagem:`, messageId);
+      console.log(`ðŸ“ Session ID válido:`, validSessionId);
       
       await sendFeedback(validSessionId, messageId, rating);
-      console.log(`✅ Feedback ${feedbackType} enviado com sucesso!`);
+      console.log(`âœ… Feedback ${feedbackType} enviado com sucesso!`);
       
       // Marca o feedback como enviado com sucesso
       setFeedbackGiven(prev => ({
@@ -774,7 +777,7 @@ Status: Erro 500 - Problema interno do servidor`;
       }));
       
     } catch (error) {
-      console.error(`❌ Erro ao enviar feedback:`, error.message);
+      console.error(`âŒ Erro ao enviar feedback:`, error.message);
       
       // Remove o feedback em caso de erro para permitir nova tentativa
       setFeedbackGiven(prev => {
@@ -785,13 +788,62 @@ Status: Erro 500 - Problema interno do servidor`;
       
       // Se for erro 422, pode ser que o backend espera um formato diferente
       if (error.message.includes('422')) {
-        console.warn('⚠️ O backend pode estar esperando um formato diferente de dados.');
-        console.warn('⚠️ Verifique com o time de backend o formato esperado para o endpoint /chat/feedback');
+        console.warn('âš ï¸ O backend pode estar esperando um formato diferente de dados.');
+        console.warn('âš ï¸ Verifique com o time de backend o formato esperado para o endpoint /chat/feedback');
       }
     }
   };
 
   // Função para copiar texto para área de transferência
+  const getCopyableMessageText = (msg) => {
+    if (!msg) return '';
+
+    if (msg.isWelcome) {
+      return [
+        'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+        '',
+        'Estou aqui para facilitar sua jornada.',
+        '',
+        'Você pode me perguntar sobre qualquer conteúdo do seu curso: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é te dar as melhores respostas sobre o conteúdo do seu curso.',
+        '',
+        'Estou limitada nosso conteúdo interno. Não posso responder outras dúvidas, como por exemplo, fazer um bolo.',
+        '',
+        'Pode contar comigo para tornar o aprendizado mais leve, claro e acessível.',
+        '',
+        'Vamos juntos!'
+      ].join('\n');
+    }
+
+    let text = msg.text || '';
+
+    if (Array.isArray(msg.references) && msg.references.length > 0) {
+      const refs = msg.references.map((ref) => {
+        const source = ref.source || ref.title || 'Fonte';
+        const page = ref.page ? `, páginas: ${ref.page}` : '';
+        const link = ref.link ? `, link: ${ref.link}` : '';
+        return `- ${source}${page}${link}`;
+      });
+      text += `\n\nFontes consultadas:\n${refs.join('\n')}`;
+    }
+
+    if (Array.isArray(msg.media) && msg.media.length > 0) {
+      const images = msg.media.filter((item) => item.type === 'image');
+      const videos = msg.media.filter((item) => item.type === 'video');
+
+      if (images.length > 0) {
+        const imageLines = images.map((img) => `- ${img.alt || 'Imagem'}: ${img.url || ''}`);
+        text += `\n\nImagens relacionadas:\n${imageLines.join('\n')}`;
+      }
+
+      if (videos.length > 0) {
+        const videoLines = videos.map((video) => `- ${video.title || 'Vídeo'}: ${video.url || ''}`);
+        text += `\n\nVídeos relacionados:\n${videoLines.join('\n')}`;
+      }
+    }
+
+    return text.trim();
+  };
+
   const handleCopyMessage = async (text, messageId) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -811,7 +863,7 @@ Status: Erro 500 - Problema interno do servidor`;
         });
       }, 2000);
       
-      console.log('✅ Texto copiado com sucesso!');
+      console.log('âœ… Texto copiado com sucesso!');
     } catch (error) {
       console.error('Erro ao copiar texto:', error);
       // Fallback para navegadores mais antigos
@@ -837,7 +889,7 @@ Status: Erro 500 - Problema interno do servidor`;
           });
         }, 2000);
         
-        console.log('✅ Texto copiado com sucesso (fallback)!');
+        console.log('âœ… Texto copiado com sucesso (fallback)!');
       } catch (err) {
         console.error('Erro ao copiar texto (fallback):', err);
       }
@@ -861,19 +913,19 @@ Status: Erro 500 - Problema interno do servidor`;
     
     // Tenta deletar no backend (se o endpoint existir)
     try {
-      console.log('🗑️ Tentando deletar conversa no backend:', chatId);
+      console.log('ðŸ—‘ï¸ Tentando deletar conversa no backend:', chatId);
       await deleteChat(chatId);
-      console.log('✅ Conversa deletada com sucesso no backend!');
+      console.log('âœ… Conversa deletada com sucesso no backend!');
     } catch (error) {
-      console.log('⚠️ Erro ao deletar no backend (mantendo delete local):', error.message);
+      console.log('âš ï¸ Erro ao deletar no backend (mantendo delete local):', error.message);
     }
     
-    console.log('✅ Conversa removida da interface');
+    console.log('âœ… Conversa removida da interface');
   };
 
   // Função para carregar uma conversa do histórico
   const handleLoadChat = async (chat) => {
-    console.log('🔍 Carregando chat:', chat);
+    console.log('ðŸ” Carregando chat:', chat);
     
     try {
       // Define o ID do chat atual
@@ -885,11 +937,11 @@ Status: Erro 500 - Problema interno do servidor`;
       setChatTitle(generateCorrectTitle(chat));
       
       // Carrega a conversa completa da API
-      console.log('📡 Buscando conversa completa da API:', chatId);
+      console.log('ðŸ“¡ Buscando conversa completa da API:', chatId);
         const chatData = await loadChat(chatId);
         
         if (!chatData) {
-          console.log('⚠️ Conversa não encontrada no backend, iniciando nova.');
+          console.log('âš ï¸ Conversa não encontrada no backend, iniciando nova.');
           localStorage.removeItem('activeChatId');
           setMessages([
             {
@@ -905,21 +957,21 @@ Status: Erro 500 - Problema interno do servidor`;
           return;
         }
 
-        console.log('📦 Dados da conversa carregados:', chatData);
+        console.log('ðŸ“¦ Dados da conversa carregados:', chatData);
       
       const messagesToLoad = extractMessagesFromChatData(chatData, chat);
 
 
-      console.log('📝 Mensagens encontradas:', messagesToLoad);
+      console.log('ðŸ“ Mensagens encontradas:', messagesToLoad);
       
       if (messagesToLoad.length > 0) {
         const formattedMessages = formatMessagesForUI(messagesToLoad);
 
 
-        console.log('✅ Mensagens formatadas:', formattedMessages);
+        console.log('âœ… Mensagens formatadas:', formattedMessages);
         setMessages(formattedMessages);
       } else {
-        console.log('⚠️ Nenhuma mensagem encontrada, usando mensagem padrão');
+        console.log('âš ï¸ Nenhuma mensagem encontrada, usando mensagem padrão');
         // Se não tiver mensagens, inicia com mensagem de boas-vindas
         setMessages([
           {
@@ -934,7 +986,7 @@ Status: Erro 500 - Problema interno do servidor`;
       }
       
     } catch (error) {
-      console.error('❌ Erro ao carregar conversa:', error);
+      console.error('âŒ Erro ao carregar conversa:', error);
       
       // Fallback: usar dados básicos do histórico
       const chatId = chat.id || chat.session_id || chat.chat_id;
@@ -1032,7 +1084,7 @@ Status: Erro 500 - Problema interno do servidor`;
             {
               id: 1,
               type: 'ai',
-              text: 'OlÃ¡! Eu sou a SEN.AI, sua parceira de estudo.',
+              text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
               isWelcome: true,
               timestamp: new Date(),
               messageId: 'welcome-msg'
@@ -1055,7 +1107,7 @@ Status: Erro 500 - Problema interno do servidor`;
 
   const handleNewChat = () => {
     // A nova API salva automaticamente, então só precisamos limpar a interface
-    console.log('🆕 Iniciando nova conversa...');
+    console.log('ðŸ†• Iniciando nova conversa...');
     
     // Cria nova sessão com UUID válido
     const newSessionId = generateUUID();
@@ -1085,7 +1137,7 @@ Status: Erro 500 - Problema interno do servidor`;
     // Força reload do histórico na próxima abertura
     setHistoryLoaded(false);
     
-    console.log('✅ Nova conversa iniciada!');
+    console.log('âœ… Nova conversa iniciada!');
   };
 
   const handleTitleEdit = () => {
@@ -1128,9 +1180,9 @@ Status: Erro 500 - Problema interno do servidor`;
     const userMessages = messages.filter(msg => msg.type === 'user');
     if (userMessages.length > 0) {
       try {
-        console.log('📝 Salvando novo título:', chatTitle);
+        console.log('ðŸ“ Salvando novo título:', chatTitle);
         await renameChat(sessionId, chatTitle);
-        console.log('✅ Título salvo com sucesso!');
+        console.log('âœ… Título salvo com sucesso!');
         
         // Força recarregamento do histórico para refletir a mudança
         setHistoryLoaded(false);
@@ -1138,12 +1190,45 @@ Status: Erro 500 - Problema interno do servidor`;
           loadHistory(true);
         }
       } catch (error) {
-        console.error('❌ Erro ao salvar título:', error);
+        console.error('âŒ Erro ao salvar título:', error);
       }
     } else {
       // Sem mensagens ainda: agenda para renomear após a primeira pergunta
       setPendingTitleRename(true);
     }
+  };
+
+  const handleOpenLogoutModal = () => {
+    setIsLogoutModalOpen(true);
+  };
+
+  const handleCloseLogoutModal = () => {
+    setIsLogoutModalOpen(false);
+  };
+
+  const getMoodleReturnUrl = () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const explicitReturn =
+        params.get('return_url') ||
+        params.get('moodle_return_url') ||
+        params.get('redirect_url');
+      if (explicitReturn) return explicitReturn;
+    } catch (error) {
+      console.warn('Falha ao ler parâmetros de retorno:', error);
+    }
+
+    if (document.referrer && document.referrer.startsWith('http')) {
+      return document.referrer;
+    }
+
+    return `${window.location.origin}/my/`;
+  };
+
+  const handleConfirmLogout = () => {
+    const moodleUrl = getMoodleReturnUrl();
+    setIsLogoutModalOpen(false);
+    window.location.href = moodleUrl;
   };
 
   return (
@@ -1162,6 +1247,8 @@ Status: Erro 500 - Problema interno do servidor`;
             <div className="hidden md:flex items-center gap-2 bg-[#262626] text-[#F2F2F2] px-4 py-2 rounded-md text-sm">
               <button 
                 onClick={handleTitleEdit}
+                title="alterar nome do chat"
+                aria-label="alterar nome do chat"
                 className="p-0.5 text-[#F2F2F2] hover:text-white transition-colors"
               >
                 <Pencil size={14} />
@@ -1189,6 +1276,8 @@ Status: Erro 500 - Problema interno do servidor`;
             {/* Mobile: Chat title button */}
             <button 
               onClick={handleTitleEdit}
+              title="alterar nome do chat"
+              aria-label="alterar nome do chat"
               className="flex md:hidden items-center gap-2 bg-[#262626] text-[#F2F2F2] px-3 py-1.5 rounded-md text-xs hover:bg-[#1a1a1a] transition-colors"
             >
               <Pencil size={12} />
@@ -1218,6 +1307,7 @@ Status: Erro 500 - Problema interno do servidor`;
             {/* Desktop: Nova conversa com texto */}
             <button 
               onClick={handleNewChat}
+              title="nova conversa"
               className="hidden md:flex items-center gap-2 bg-[#262626] text-[#F2F2F2] px-4 py-2 rounded-md text-sm hover:bg-[#1a1a1a] transition-colors"
             >
               <img src={novaConversaIcon} alt="Nova conversa" className="w-4 h-4" />
@@ -1225,46 +1315,60 @@ Status: Erro 500 - Problema interno do servidor`;
             </button>
             
             {/* Mobile: Nova conversa só ícone */}
-            <button 
-              onClick={handleNewChat}
-              className="flex md:hidden bg-[#262626] text-[#F2F2F2] rounded-md hover:bg-[#1a1a1a] transition-colors items-center justify-center"
-              style={{ 
-                width: '32px', 
-                height: '32px',
-                padding: '6px'
-              }}
-            >
-              <img src={novaConversaIcon} alt="Nova conversa" className="w-4 h-4" />
-            </button>
+            <div className="relative group md:hidden">
+              <button 
+                onClick={handleNewChat}
+                title="nova conversa"
+                aria-label="nova conversa"
+                className="bg-[#262626] text-[#F2F2F2] rounded-md hover:bg-[#1a1a1a] transition-colors items-center justify-center flex"
+                style={{ 
+                  width: '32px', 
+                  height: '32px',
+                  padding: '6px'
+                }}
+              >
+                <img src={novaConversaIcon} alt="Nova conversa" className="w-4 h-4" />
+              </button>
+              <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap rounded bg-[#262626] px-2 py-1 text-[11px] text-white opacity-0 shadow transition-opacity group-hover:opacity-100">
+                nova conversa
+              </span>
+            </div>
             
-            <button 
-              onClick={() => setIsHistoryOpen(true)}
-              className="text-[#F2F2F2] rounded-md transition-colors flex items-center justify-center" 
-              style={{ 
-                width: '32px', 
-                height: '32px',
-                padding: '6px',
-                backgroundColor: isHistoryOpen ? '#C13A0D' : '#262626'
-              }}
-            >
-              <img src={historicoIcon} alt="Histórico" className="w-4 h-4 md:w-5 md:h-5" />
-            </button>
+            <div className="relative group">
+              <button 
+                onClick={() => setIsHistoryOpen(true)}
+                title="histórico"
+                aria-label="histórico"
+                className="text-[#F2F2F2] rounded-md transition-colors flex items-center justify-center" 
+                style={{ 
+                  width: '32px', 
+                  height: '32px',
+                  padding: '6px',
+                  backgroundColor: isHistoryOpen ? '#C13A0D' : '#262626'
+                }}
+              >
+                <img src={historicoIcon} alt="Histórico" className="w-4 h-4 md:w-5 md:h-5" />
+              </button>
+              <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap rounded bg-[#262626] px-2 py-1 text-[11px] text-white opacity-0 shadow transition-opacity group-hover:opacity-100">
+                histórico
+              </span>
+            </div>
             
             {/* Desktop: User info completo */}
-            <div className="hidden md:flex items-center gap-2">
-              <div className="w-8 h-8 bg-[#EEF4FF] rounded-full flex items-center justify-center">
-                <User size={18} className="text-[#BAD4FF]" />
-              </div>
+            <div className="hidden md:flex items-center">
               <div className="text-left">
                 <p className="text-sm font-medium text-gray-700">{getDisplayUserName(moodleUser)}</p>
-                <p className="text-xs text-[#EF5E31] cursor-pointer hover:text-[#d54d25]">Sair</p>
+                <button
+                  type="button"
+                  onClick={handleOpenLogoutModal}
+                  className="text-xs text-[#EF5E31] cursor-pointer hover:text-[#d54d25]"
+                >
+                  Sair
+                </button>
               </div>
             </div>
             
             {/* Mobile: Só o ícone do usuário */}
-            <button className="flex md:hidden w-7 h-7 bg-[#EEF4FF] rounded-full items-center justify-center">
-              <User size={16} className="text-[#BAD4FF]" />
-            </button>
           </div>
         </div>
       </header>
@@ -1290,9 +1394,9 @@ Status: Erro 500 - Problema interno do servidor`;
             <div className="flex flex-col md:flex-row justify-center gap-4 md:gap-6 px-4">
               {/* Card 1 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl transition-shadow cursor-pointer text-left flex flex-col w-full md:w-[160px]"
+                className="bg-[#FFFFFF] rounded-2xl text-left flex flex-col w-full md:w-[220px] overflow-hidden"
                 style={{ 
-                  height: '178px', 
+                  minHeight: '178px', 
                   padding: '16px',
                   boxShadow: '0px 0px 12px 0px #C3E9FC80'
                 }}
@@ -1319,69 +1423,59 @@ Status: Erro 500 - Problema interno do servidor`;
                     letterSpacing: '0.1px'
                   }}
                 >
-                  Quero ajuda para tirar minhas dúvidas
+                  Quero ajudar você a tirar suas dúvidas
                 </h3>
                 <p 
-                  className="text-[#BDBDBD]"
+                  className="text-[#BDBDBD] break-words"
                   style={{ 
                     fontFamily: 'Inter, sans-serif',
                     fontWeight: 400,
                     fontSize: '12px',
-                    lineHeight: '100%',
+                    lineHeight: '120%',
                     letterSpacing: '0.4px'
                   }}
                 >
-                  Precisa de ajuda para usar a SEN.AI? Clique aqui para obter ajuda do assistente
+                  Pergunte sobre o conteúdo do curso e eu busco a resposta nas apostilas, indicando a fonte e a página, além de mostrar links de vídeos e imagens para facilitar seu aprendizado.
                 </p>
               </div>
 
               {/* Card 2 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl transition-shadow cursor-pointer text-left flex flex-col w-full md:w-[160px]"
+                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-left flex flex-col w-full md:w-[220px] hover:bg-[#FFEFEA]"
                 style={{ 
-                  height: '178px', 
+                  height: 'fit-content', 
                   padding: '16px',
                   boxShadow: '0px 0px 12px 0px #C3E9FC80'
                 }}
                 onClick={() => setIsHistoryOpen(true)}
               >
-                <div 
-                  className="bg-[#FFEFEA] flex items-center justify-center mb-3" 
-                  style={{ 
-                    width: '40px', 
-                    height: '40px',
-                    borderRadius: '8px',
-                    padding: '4px',
-                    opacity: 1
-                  }}
-                >
-                  <img src={vectorLogo} alt="Histórico" className="w-6 h-6" />
+                <div className="flex items-center gap-3">
+                  <div 
+                    className="bg-[#FFEFEA] flex items-center justify-center" 
+                    style={{ 
+                      width: '40px', 
+                      height: '40px',
+                      borderRadius: '8px',
+                      padding: '4px',
+                      opacity: 1
+                    }}
+                  >
+                    <img src={vectorLogo} alt="Histórico" className="w-6 h-6" />
+                  </div>
+                  <h3 
+                    className="text-[#2D2D2D]"
+                    style={{ 
+                      fontFamily: 'Inter, sans-serif',
+                      fontWeight: 700,
+                      fontSize: '14px',
+                      lineHeight: '100%',
+                      letterSpacing: '0.1px',
+                      color: '#E84910'
+                    }}
+                  >
+                    Veja suas últimas conversas
+                  </h3>
                 </div>
-                <h3 
-                  className="text-[#2D2D2D] mb-2"
-                  style={{ 
-                    fontFamily: 'Inter, sans-serif',
-
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    lineHeight: '100%',
-                    letterSpacing: '0.1px'
-                  }}
-                >
-                  Quais foram suas últimas conversas?
-                </h3>
-                <p 
-                  className="text-[#BDBDBD]"
-                  style={{ 
-                    fontFamily: 'Inter, sans-serif',
-                    fontWeight: 400,
-                    fontSize: '12px',
-                    lineHeight: '100%',
-                    letterSpacing: '0.4px'
-                  }}
-                >
-                  Aqui você pode relembrar ou continuar de uma conversa anterior
-                </p>
               </div>
             </div>
           </div>
@@ -1421,7 +1515,8 @@ Status: Erro 500 - Problema interno do servidor`;
                         {/* Footer com botão copiar */}
                         <div className="flex items-center justify-end mt-4">
                           <button 
-                            onClick={() => handleCopyMessage(msg.text, msg.messageId)}
+                            onClick={() => handleCopyMessage(getCopyableMessageText(msg), msg.messageId)}
+                            title="copiar"
                             className="hover:opacity-80 transition-opacity flex items-center justify-center"
                           >
                             {copiedMessages[msg.messageId] ? (
@@ -1442,9 +1537,9 @@ Status: Erro 500 - Problema interno do servidor`;
                         className="bg-white rounded-2xl px-4 md:px-6 py-3 md:py-4"
                         style={{ border: '1px solid #DFDFDF' }}
                       >
-                        {/* Header com Sen.ai dentro da caixa */}
-                        <div className="mb-3 pb-3 border-b border-gray-200">
-                          <span className="text-[#FF6B35] font-bold text-sm">Sen.ai</span>
+                        {/* Header com logo SEN.AI dentro da caixa */}
+                        <div className="mb-3 pb-3 border-b border-gray-200 flex items-center gap-2">
+                          <img src={fiergsSenaiLogo} alt="SEN.AI" className="h-6 w-auto" />
                           <span className="text-gray-400 text-sm"> · {formatRelativeTime(msg.timestamp)}</span>
                         </div>
                         
@@ -1530,7 +1625,8 @@ Status: Erro 500 - Problema interno do servidor`;
                                 </button>
                                 {/* Copiar */}
                                 <button 
-                                  onClick={() => handleCopyMessage(msg.text, msg.messageId)}
+                                  onClick={() => handleCopyMessage(getCopyableMessageText(msg), msg.messageId)}
+                                  title="copiar"
                                   className="hover:opacity-80 transition-opacity ml-2"
                                   style={{ 
                                     background: 'none',
@@ -1563,10 +1659,17 @@ Status: Erro 500 - Problema interno do servidor`;
                           {/* Primeira mensagem: apenas botão copiar */}
                           {msg.id === 1 && (
                             <button 
-                              onClick={() => handleCopyMessage(msg.text)}
+                              onClick={() => handleCopyMessage(getCopyableMessageText(msg), msg.messageId)}
+                              title="copiar"
                               className="hover:opacity-80 transition-opacity flex items-center justify-center"
                             >
-                              <img src={copiarIcon} alt="Copiar" style={{ width: '16px', height: '16px' }} />
+                              {copiedMessages[msg.messageId] ? (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                  <path d="M20 6L9 17L4 12" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                              ) : (
+                                <img src={copiarIcon} alt="Copiar" style={{ width: '16px', height: '16px' }} />
+                              )}
                             </button>
                           )}
                         </div>
@@ -1662,7 +1765,7 @@ Status: Erro 500 - Problema interno do servidor`;
       </div>
 
       {/* Sidebar de Histórico */}
-      <HistorySidebar 
+      <HistorySidebar
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         history={chatHistory}
@@ -1670,7 +1773,35 @@ Status: Erro 500 - Problema interno do servidor`;
         isLoading={isLoadingHistory}
         onRefresh={handleRefreshHistory}
         onDeleteChat={handleDeleteChat}
+        canDeleteChat={!!moodleUser?.isAdmin}
       />
+
+      {isLogoutModalOpen && (
+        <div className="fixed inset-0 z-[60] bg-white flex items-center justify-center px-4">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-sm p-6">
+            <h3 className="text-lg font-semibold text-[#2D2D2D] mb-2">Deseja encerrar este chat?</h3>
+            <p className="text-sm text-gray-600 mb-6">
+              Ao encerrar o chat, você será redirecionado para o Moodle e sua sessão continuará ativa.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleConfirmLogout}
+                className="w-full px-4 py-2.5 text-sm rounded-md bg-[#E84910] text-white hover:bg-[#d4410d]"
+              >
+                Sim, quero encerrar
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseLogoutModal}
+                className="w-full px-4 py-2.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                Não, quero continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

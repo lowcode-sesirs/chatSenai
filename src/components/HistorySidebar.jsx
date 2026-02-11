@@ -57,7 +57,7 @@ const generateDisplayTitle = (chat) => {
 /**
  * Componente de sidebar para exibir histórico de conversas
  */
-function HistorySidebar({ isOpen, onClose, history, onSelectChat, isLoading, onRefresh, onDeleteChat }) {
+function HistorySidebar({ isOpen, onClose, history, onSelectChat, isLoading, onRefresh, onDeleteChat, canDeleteChat = false }) {
   if (!isOpen) return null;
 
   return (
@@ -137,10 +137,12 @@ function HistorySidebar({ isOpen, onClose, history, onSelectChat, isLoading, onR
                               {formatTime(chat.timestamp || chat.created_at || chat.date)}
                             </span>
                             <button 
-                              className="hover:opacity-70 transition-opacity flex-shrink-0"
+                              className={`transition-opacity flex-shrink-0 ${canDeleteChat ? 'hover:opacity-70' : 'opacity-40 cursor-not-allowed'}`}
+                              disabled={!canDeleteChat}
+                              title={canDeleteChat ? 'Excluir conversa' : 'Apenas administradores podem excluir'}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (onDeleteChat) {
+                                if (canDeleteChat && onDeleteChat) {
                                   onDeleteChat(chat);
                                 }
                               }}
