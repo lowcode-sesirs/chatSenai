@@ -7,27 +7,6 @@
 function AIMessageContent({ message }) {
   const [imageErrors, setImageErrors] = useState({});
 
-  const shouldRenderReferences = (messageText, references) => {
-    if (!Array.isArray(references) || references.length === 0) return false;
-
-    const raw = (messageText || '').trim().toLowerCase();
-    if (!raw) return true;
-
-    const normalized = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    const genericPatterns = [
-      /^ola\b/,
-      /^oi\b/,
-      /bem-vindo/,
-      /em que posso ajudar/,
-      /como posso ajudar/,
-      /tudo bem/
-    ];
-
-    const isGenericGreeting = genericPatterns.some((pattern) => pattern.test(normalized));
-    if (isGenericGreeting) return false;
-
-    return true;
-  };
 
   const renderTextWithVideoLinks = (text) => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -113,10 +92,6 @@ function AIMessageContent({ message }) {
   };
 
   const renderReferences = (references) => {
-    if (!shouldRenderReferences(message?.text, references)) {
-      return null;
-    }
-
     if (references && Array.isArray(references) && references.length > 0) {
       return (
         <div className="mt-4 p-3 bg-gray-50 rounded-lg border-l-4 border-[#E84910]">

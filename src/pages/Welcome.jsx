@@ -1113,6 +1113,24 @@ Status: Erro 500 - Problema interno do servidor`;
     const newSessionId = generateUUID();
     setSessionId(newSessionId);
     setCurrentChatId(null);
+
+    // Atualiza imediatamente o chat ativo para o widget maximizado abrir limpo
+    try {
+      localStorage.setItem('activeChatId', newSessionId);
+    } catch (error) {
+      console.warn('Falha ao salvar novo activeChatId no localStorage:', error);
+    }
+
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(
+          { type: 'senai_active_chat', chatId: newSessionId },
+          '*'
+        );
+      }
+    } catch (error) {
+      console.warn('Falha ao enviar novo activeChatId via postMessage:', error);
+    }
     
     // Reseta as mensagens para o estado inicial
     setMessages([
@@ -1232,7 +1250,7 @@ Status: Erro 500 - Problema interno do servidor`;
   };
 
   return (
-    <div className="flex flex-col h-screen bg-[#ffffff]">
+    <div className="flex flex-col h-screen min-h-0 overflow-hidden bg-[#ffffff]">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-3 md:px-6 py-2 md:py-3 flex-shrink-0 sticky top-0 z-50">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between">
@@ -1374,7 +1392,7 @@ Status: Erro 500 - Problema interno do servidor`;
       </header>
 
       {/* Main Content - Scrollable */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-[900px] mx-auto px-3 md:px-6 w-full py-6 md:py-12">
           {/* Logo and Welcome */}
           <div className="text-center mb-8 md:mb-16">
@@ -1391,42 +1409,44 @@ Status: Erro 500 - Problema interno do servidor`;
             </h2>
 
             {/* Action Cards */}
-            <div className="flex flex-col md:flex-row justify-center gap-4 md:gap-6 px-4">
+            <div className="flex flex-col items-center gap-4 px-4">
               {/* Card 1 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl text-left flex flex-col w-full md:w-[220px] overflow-hidden"
+                className="bg-[#FFFFFF] rounded-2xl text-center items-center flex flex-col w-full max-w-[640px] overflow-hidden"
                 style={{ 
                   minHeight: '178px', 
                   padding: '16px',
                   boxShadow: '0px 0px 12px 0px #C3E9FC80'
                 }}
               >
-                <div 
-                  className="bg-[#FFEFEA] flex items-center justify-center mb-3" 
-                  style={{ 
-                    width: '40px', 
-                    height: '40px',
-                    borderRadius: '8px',
-                    padding: '4px',
-                    opacity: 1
-                  }}
-                >
-                  <img src={questionIcon} alt="Question" className="w-6 h-6" />
+                <div className="flex items-center justify-center gap-3 mb-2 w-full">
+                  <div
+                    className="bg-[#FFEFEA] flex items-center justify-center"
+                    style={{
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '8px',
+                      padding: '4px',
+                      opacity: 1
+                    }}
+                  >
+                    <img src={questionIcon} alt="Question" className="w-6 h-6" />
+                  </div>
+                  <h3
+                    className="text-[#2D2D2D]"
+                    style={{
+                      fontFamily: 'Inter, sans-serif',
+                      fontWeight: 700,
+                      fontSize: '14px',
+                      lineHeight: '100%',
+                      letterSpacing: '0.1px'
+                    }}
+                  >
+                    Quero ajudar você a tirar suas dúvidas
+                  </h3>
                 </div>
-                <h3 
-                  className="text-[#2D2D2D] mb-2"
-                  style={{ 
-                    fontFamily: 'Inter, sans-serif',
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    lineHeight: '100%',
-                    letterSpacing: '0.1px'
-                  }}
-                >
-                  Quero ajudar você a tirar suas dúvidas
-                </h3>
                 <p 
-                  className="text-[#BDBDBD] break-words"
+                  className="text-[#BDBDBD] break-words text-center"
                   style={{ 
                     fontFamily: 'Inter, sans-serif',
                     fontWeight: 400,
@@ -1441,7 +1461,7 @@ Status: Erro 500 - Problema interno do servidor`;
 
               {/* Card 2 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-left flex flex-col w-full md:w-[220px] hover:bg-[#FFEFEA]"
+                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-center items-center flex flex-col w-full max-w-[640px] hover:bg-[#FFEFEA]"
                 style={{ 
                   height: 'fit-content', 
                   padding: '16px',
@@ -1449,7 +1469,7 @@ Status: Erro 500 - Problema interno do servidor`;
                 }}
                 onClick={() => setIsHistoryOpen(true)}
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center gap-3 w-full">
                   <div 
                     className="bg-[#FFEFEA] flex items-center justify-center" 
                     style={{ 
