@@ -1,5 +1,5 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { Pencil, Square } from 'lucide-react';
+import { Pencil, Square, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
 import { getMoodleUser } from '../services/moodleAuthService';
 import AIMessageContent from '../components/AIMessageContent';
@@ -9,8 +9,6 @@ import questionIcon from '../assets/question.png';
 import fiergsSenaiLogo from '../assets/senai.png';
 import vectorLogo from '../assets/button-cursor.svg';
 import ultimasConversas from '../assets/Vector.png';
-import likeIcon from '../assets/like.png';
-import dislikeIcon from '../assets/thumb_down_alt.png';
 import sendIcon from '../assets/Send.solid.png';
 import copiarIcon from '../assets/copiar.png';
 import novaConversaIcon from '../assets/novaConversa.png';
@@ -1588,8 +1586,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Dislike */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, false)}
+                                  title="não gostei"
+                                  aria-label="não gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`transition-all ${
+                                  className={`relative group transition-all flex items-center justify-center w-5 h-5 ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -1601,24 +1601,25 @@ Status: Erro 500 - Problema interno do servidor`;
                                     margin: '0'
                                   }}
                                 >
-                                  <img 
-                                    src={dislikeIcon} 
-                                    alt="Dislike" 
-                                    style={{ 
-                                      width: '14.89px', 
-                                      height: '12.92px',
-                                      display: 'block',
-                                      filter: feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
-                                        ? 'brightness(0) saturate(100%) invert(39%) sepia(88%) saturate(3066%) hue-rotate(9deg) brightness(97%) contrast(96%)'
-                                        : 'none'
-                                    }} 
+                                  <ThumbsDown
+                                    size={16}
+                                    className={
+                                      feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
+                                        ? 'text-[#e84910]'
+                                        : 'text-[#9ca3af]'
+                                    }
                                   />
+                                  <span className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                                    não gostei
+                                  </span>
                                 </button>
                                 {/* Like */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, true)}
+                                  title="gostei"
+                                  aria-label="gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`transition-all ${
+                                  className={`relative group transition-all flex items-center justify-center w-5 h-5 ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -1630,18 +1631,17 @@ Status: Erro 500 - Problema interno do servidor`;
                                     margin: '0'
                                   }}
                                 >
-                                  <img 
-                                    src={likeIcon} 
-                                    alt="Like" 
-                                    style={{ 
-                                      width: '14.89px', 
-                                      height: '12.92px',
-                                      display: 'block',
-                                      filter: feedbackGiven[msg.messageId]?.type === 'like' && feedbackGiven[msg.messageId]?.status === 'sent'
-                                        ? 'brightness(0) saturate(100%) invert(59%) sepia(98%) saturate(1946%) hue-rotate(201deg) brightness(97%) contrast(94%)'
-                                        : 'none'
-                                    }} 
+                                  <ThumbsUp
+                                    size={16}
+                                    className={
+                                      feedbackGiven[msg.messageId]?.type === 'like' && feedbackGiven[msg.messageId]?.status === 'sent'
+                                        ? 'text-[#4f8fd9]'
+                                        : 'text-[#9ca3af]'
+                                    }
                                   />
+                                  <span className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
+                                    gostei
+                                  </span>
                                 </button>
                                 {/* Copiar */}
                                 <button 
