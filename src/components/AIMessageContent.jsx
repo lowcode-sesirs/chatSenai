@@ -7,6 +7,14 @@
 function AIMessageContent({ message }) {
   const [imageErrors, setImageErrors] = useState({});
 
+  const getPdfViewerUrl = (reference) => {
+    const contentSourceId = reference?.contentSourceId || reference?.id;
+    if (!contentSourceId) return null;
+    const page = Number(reference?.targetPage || 1);
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    return `/pdf/${contentSourceId}?page=${safePage}`;
+  };
+
 
   const renderTextWithVideoLinks = (text) => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
@@ -102,16 +110,27 @@ function AIMessageContent({ message }) {
                 Fonte: {ref.source || ref.title || ref}
                 {ref.page && `, paginas: ${ref.page}`}
                 {ref.chapter && `, ${ref.chapter}`}
-                {ref.link && (
+                {(getPdfViewerUrl(ref) || ref.link) && (
                   <div className="mt-1">
-                    <a
-                      href={ref.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[#E84910] hover:underline"
-                    >
-                      {ref.source || ref.title || 'Abrir apostila'}
-                    </a>
+                    {getPdfViewerUrl(ref) ? (
+                      <a
+                        href={getPdfViewerUrl(ref)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#E84910] hover:underline"
+                      >
+                        {ref.source || ref.title || 'Abrir apostila'}
+                      </a>
+                    ) : (
+                      <a
+                        href={ref.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#E84910] hover:underline"
+                      >
+                        {ref.source || ref.title || 'Abrir apostila'}
+                      </a>
+                    )}
                   </div>
                 )}
               </div>

@@ -18,8 +18,7 @@ import novaConversaIcon from '../assets/novaConversa.png';
 function Welcome() {
   const [message, setMessage] = useState('');
   const [moodleUser, setMoodleUser] = useState(() => getMoodleUser());
-  const now = new Date();
-  const [chatTitle, setChatTitle] = useState(`Chat ${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`);
+  const [chatTitle, setChatTitle] = useState('');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingTitleRename, setPendingTitleRename] = useState(false);
@@ -102,6 +101,11 @@ function Welcome() {
     if (name) return String(name);
     return 'Aluno';
   };
+
+  const hasUserMessages = messages.some((msg) => msg.type === 'user');
+  const displayChatTitle = hasUserMessages
+    ? ((chatTitle || '').trim() || 'Sem titulo')
+    : 'Chat sem título';
 
   const matchChatToUser = (chat, user) => {
     if (!chat || !user) return false;
@@ -295,47 +299,13 @@ function Welcome() {
     }
   }, [isHistoryOpen]);
 
-  // Função para gerar título correto (igual ao histórico)
+  // Sempre prioriza o título vindo do backend.
   const generateCorrectTitle = (chat) => {
-    // Se tem título editado manualmente (não é pergunta nem formato de data padrão), usa ele
-    if (chat.title && 
-        !chat.title.startsWith('Olá') && 
-        !chat.title.startsWith('Como posso') && 
-        !chat.title.startsWith('Qual') && 
-        !chat.title.endsWith('?')) {
-      
-      // Se começa com "Chat ", verifica se é o formato de data padrão
-      if (chat.title.startsWith('Chat ')) {
-        const dateRegex = /^Chat \d{2}\/\d{2}\/\d{4}$/;
-        if (!dateRegex.test(chat.title)) {
-          // Não é formato de data padrão, é título editado
-          return chat.title;
-        }
-        // Ã‰ formato de data padrão, continua para gerar pela data real
-      } else {
-        // Não começa com "Chat ", é título editado
-        return chat.title;
-      }
+    const backendTitle = chat?.title;
+    if (typeof backendTitle === 'string' && backendTitle.trim()) {
+      return backendTitle.trim();
     }
-    
-    // Gera título baseado na data
-    const chatDate = chat.timestamp || chat.created_at || chat.updated_at || chat.date;
-    if (chatDate) {
-      const date = new Date(chatDate);
-      if (!isNaN(date.getTime())) {
-        const day = date.getDate().toString().padStart(2, '0');
-        const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        const year = date.getFullYear();
-        return `Chat ${day}/${month}/${year}`;
-      }
-    }
-    
-    // Fallback: data atual
-  const now = new Date();
-  const day = now.getDate().toString().padStart(2, '0');
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const year = now.getFullYear();
-  return `Chat ${day}/${month}/${year}`;
+    return 'Sem titulo';
   };
 
   const extractMessagesFromChatData = (chatData, fallbackChat) => {
@@ -385,6 +355,42 @@ function Welcome() {
     return value;
   };
 
+  const getTargetPage = (doc) => {
+    const direct = Number(doc?.target_page ?? doc?.targetPage);
+    if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
+
+    const pagesValue = String(doc?.pages || '');
+    const firstMatch = pagesValue.match(/\d+/);
+    if (firstMatch) return Number(firstMatch[0]);
+
+    const linkValue = String(doc?.Link || doc?.link || '');
+    const pageParam = linkValue.match(/[?&]page=(\d+)/i);
+    if (pageParam) return Number(pageParam[1]);
+
+    return 1;
+  };
+
+  const getContentSourceId = (doc) => {
+    if (doc?.id !== undefined && doc?.id !== null) return String(doc.id);
+    const linkValue = String(doc?.Link || doc?.link || '');
+    const contentMatch = linkValue.match(/\/viewer\/([^/?#]+)/i);
+    if (contentMatch?.[1]) return contentMatch[1];
+    return null;
+  };
+
+  const normalizeReference = (ref) => {
+    const contentSourceId = getContentSourceId(ref) || ref?.contentSourceId || ref?.content_source_id || null;
+    return {
+      ...ref,
+      id: ref?.id || contentSourceId,
+      contentSourceId,
+      source: ref?.source || ref?.name || ref?.title || ref?.id || 'Fonte',
+      page: ref?.page || ref?.pages,
+      targetPage: getTargetPage(ref),
+      link: normalizeMediaUrl(ref?.link || ref?.Link || ref?.url),
+    };
+  };
+
   const formatMessagesForUI = (messagesToLoad) => {
     return messagesToLoad.map((msg, index) => {
       let messageType = 'ai';
@@ -406,13 +412,9 @@ function Welcome() {
         msg.media_payload || msg.mediaPayload || msg.media_payloads || msg.mediaPayloads || msg.media
       );
 
-      let references = Array.isArray(msg.references) ? msg.references : null;
+      let references = Array.isArray(msg.references) ? msg.references.map(normalizeReference) : null;
       if (!references && sourcesPayload && Array.isArray(sourcesPayload.documents)) {
-        references = sourcesPayload.documents.map(doc => ({
-          source: doc.name || doc.id,
-          page: doc.pages,
-          link: normalizeMediaUrl(doc.Link || doc.link)
-        }));
+        references = sourcesPayload.documents.map(normalizeReference);
       }
 
       let media = Array.isArray(msg.media) ? msg.media : null;
@@ -554,6 +556,14 @@ function Welcome() {
             console.log('ðŸ”— Stream URL fornecida pelo backend:', chatResponse.stream_url);
             streamUrl = chatResponse.stream_url;
           }
+
+          // Usa o título retornado pelo /chat no início da conversa.
+          if (!pendingTitleRename) {
+            const backendTitle = generateCorrectTitle(chatResponse);
+            if (backendTitle) {
+              setChatTitle(backendTitle);
+            }
+          }
           
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
@@ -623,15 +633,11 @@ function Welcome() {
               }
 
               if (meta?.sources) {
-                const references = meta.sources.map(doc => ({
-                  source: doc.name || doc.id,
-                  page: doc.pages,
-                  link: doc.Link || doc.link
-                }));
+                const references = meta.sources.map(normalizeReference);
                 setMessages(prev =>
                   prev.map(msg =>
                     msg.id === aiMessageId
-                      ? { ...msg, references }
+                      ? { ...msg, pendingReferences: references }
                       : msg
                   )
                 );
@@ -651,7 +657,13 @@ function Welcome() {
               setMessages(prev => 
                 prev.map(msg => 
                   msg.id === aiMessageId 
-                    ? { ...msg, text: finalText, isStreaming: false }
+                    ? {
+                        ...msg,
+                        text: finalText,
+                        isStreaming: false,
+                        references: msg.pendingReferences || msg.references,
+                        pendingReferences: undefined
+                      }
                     : msg
                 )
               );
@@ -1019,14 +1031,25 @@ Status: Erro 500 - Problema interno do servidor`;
     let ignore = false;
     const restoreActiveChat = async () => {
       let storedChatId = null;
+      let localActiveChatId = null;
         try {
           const urlParams = new URLSearchParams(window.location.search);
-          storedChatId =
+          const explicitChatIdFromUrl =
             urlParams.get('active_chat_id') ||
-            urlParams.get('session_id') ||
-            urlParams.get('sid') ||
             urlParams.get('chat_id');
-          if (storedChatId) {
+          const legacyChatIdFromUrl =
+            urlParams.get('session_id') ||
+            urlParams.get('sid');
+
+          localActiveChatId = localStorage.getItem('activeChatId');
+
+          // Prioridade:
+          // 1) active_chat_id/chat_id explícitos
+          // 2) activeChatId do localStorage (sincronizado pelo widget ao criar "nova conversa")
+          // 3) parâmetros legados session_id/sid
+          storedChatId = explicitChatIdFromUrl || localActiveChatId || legacyChatIdFromUrl;
+
+          if (storedChatId && storedChatId !== localActiveChatId) {
             localStorage.setItem('activeChatId', storedChatId);
           }
         } catch (error) {
@@ -1034,9 +1057,7 @@ Status: Erro 500 - Problema interno do servidor`;
         }
 
       try {
-        if (!storedChatId) {
-          storedChatId = localStorage.getItem('activeChatId');
-        }
+        if (!storedChatId) storedChatId = localStorage.getItem('activeChatId');
       } catch (error) {
         console.warn('Falha ao ler activeChatId do localStorage:', error);
         return;
@@ -1148,9 +1169,8 @@ Status: Erro 500 - Problema interno do servidor`;
     setFeedbackGiven({});
     setCopiedMessages({});
     
-    // Cria novo título com data atual
-    const now = new Date();
-    setChatTitle(`Chat ${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`);
+    // Novo chat sem título sintético: aguarda título vindo do backend em /chat.
+    setChatTitle('');
     
     // Força reload do histórico na próxima abertura
     setHistoryLoaded(false);
@@ -1287,7 +1307,7 @@ Status: Erro 500 - Problema interno do servidor`;
                   style={{ width: '180px' }}
                 />
               ) : (
-                <span className="text-sm font-medium">{chatTitle}</span>
+                <span className="text-sm font-medium">{displayChatTitle}</span>
               )}
             </div>
             
@@ -1315,7 +1335,7 @@ Status: Erro 500 - Problema interno do servidor`;
                   style={{ width: '140px' }}
                 />
               ) : (
-                <span className="text-xs font-medium">{chatTitle}</span>
+                <span className="text-xs font-medium">{displayChatTitle}</span>
               )}
             </button>
           </div>
@@ -1588,8 +1608,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Dislike */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, false)}
+                                  title="não gostei"
+                                  aria-label="não gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`transition-all ${
+                                  className={`transition-all flex items-center justify-center w-6 h-6 ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -1605,9 +1627,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                     src={dislikeIcon} 
                                     alt="Dislike" 
                                     style={{ 
-                                      width: '14.89px', 
-                                      height: '12.92px',
+                                      width: '16px', 
+                                      height: '16px',
                                       display: 'block',
+                                      objectFit: 'contain',
                                       filter: feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
                                         ? 'brightness(0) saturate(100%) invert(39%) sepia(88%) saturate(3066%) hue-rotate(9deg) brightness(97%) contrast(96%)'
                                         : 'none'
@@ -1617,8 +1640,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Like */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, true)}
+                                  title="gostei"
+                                  aria-label="gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`transition-all ${
+                                  className={`transition-all flex items-center justify-center w-6 h-6 ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -1634,9 +1659,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                     src={likeIcon} 
                                     alt="Like" 
                                     style={{ 
-                                      width: '14.89px', 
-                                      height: '12.92px',
+                                      width: '16px', 
+                                      height: '16px',
                                       display: 'block',
+                                      objectFit: 'contain',
                                       filter: feedbackGiven[msg.messageId]?.type === 'like' && feedbackGiven[msg.messageId]?.status === 'sent'
                                         ? 'brightness(0) saturate(100%) invert(59%) sepia(98%) saturate(1946%) hue-rotate(201deg) brightness(97%) contrast(94%)'
                                         : 'none'

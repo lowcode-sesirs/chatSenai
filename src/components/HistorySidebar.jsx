@@ -4,54 +4,11 @@ import { X, Trash2, RefreshCw } from 'lucide-react';
  * Gera título no formato "Chat DD/MM/AAAA" baseado na data da conversa
  */
 const generateDisplayTitle = (chat) => {
-  console.log('🔍 Gerando título para chat:', chat);
-  
-  // Se tem título editado manualmente (não é pergunta nem formato de data padrão), usa ele
-  if (chat.title && 
-      !chat.title.startsWith('Olá') && 
-      !chat.title.startsWith('Como posso') && 
-      !chat.title.startsWith('Qual') && 
-      !chat.title.endsWith('?')) {
-    
-    // Se começa com "Chat ", verifica se é o formato de data padrão
-    if (chat.title.startsWith('Chat ')) {
-      const dateRegex = /^Chat \d{2}\/\d{2}\/\d{4}$/;
-      if (!dateRegex.test(chat.title)) {
-        // Não é formato de data padrão, é título editado
-        console.log('📝 Usando título editado (Chat personalizado):', chat.title);
-        return chat.title;
-      }
-      // É formato de data padrão, continua para gerar pela data real
-    } else {
-      // Não começa com "Chat ", é título editado
-      console.log('📝 Usando título editado manualmente:', chat.title);
-      return chat.title;
-    }
+  const backendTitle = chat?.title;
+  if (typeof backendTitle === 'string' && backendTitle.trim()) {
+    return backendTitle.trim();
   }
-  
-  // Sempre gera título no formato "Chat DD/MM/AAAA" baseado na data
-  const chatDate = chat.timestamp || chat.created_at || chat.updated_at || chat.date;
-  
-  if (chatDate) {
-    const date = new Date(chatDate);
-    if (!isNaN(date.getTime())) {
-      const day = date.getDate().toString().padStart(2, '0');
-      const month = (date.getMonth() + 1).toString().padStart(2, '0');
-      const year = date.getFullYear();
-      const formattedTitle = `Chat ${day}/${month}/${year}`;
-      console.log('📅 Título gerado pela data:', formattedTitle);
-      return formattedTitle;
-    }
-  }
-  
-  // Último fallback: usa data atual
-  const now = new Date();
-  const day = now.getDate().toString().padStart(2, '0');
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const year = now.getFullYear();
-  const fallbackTitle = `Chat ${day}/${month}/${year}`;
-  console.log('🔄 Usando data atual como fallback:', fallbackTitle);
-  return fallbackTitle;
+  return 'Sem titulo';
 };
 
 /**
@@ -136,19 +93,20 @@ function HistorySidebar({ isOpen, onClose, history, onSelectChat, isLoading, onR
                             <span className="text-xs text-gray-400 whitespace-nowrap">
                               {formatTime(chat.timestamp || chat.created_at || chat.date)}
                             </span>
-                            <button 
-                              className={`transition-opacity flex-shrink-0 ${canDeleteChat ? 'hover:opacity-70' : 'opacity-40 cursor-not-allowed'}`}
-                              disabled={!canDeleteChat}
-                              title={canDeleteChat ? 'Excluir conversa' : 'Apenas administradores podem excluir'}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (canDeleteChat && onDeleteChat) {
-                                  onDeleteChat(chat);
-                                }
-                              }}
-                            >
-                              <Trash2 size={14} className="text-[#FF0000]" />
-                            </button>
+                            {canDeleteChat && (
+                              <button
+                                className="transition-opacity flex-shrink-0 hover:opacity-70"
+                                title="Excluir conversa"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (onDeleteChat) {
+                                    onDeleteChat(chat);
+                                  }
+                                }}
+                              >
+                                <Trash2 size={14} className="text-[#FF0000]" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         <p className="text-xs text-gray-500 line-clamp-2 leading-relaxed">

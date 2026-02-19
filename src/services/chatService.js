@@ -1,3 +1,6 @@
+import { getToken } from './tokenStore';
+import { getMoodleTokenFromURL, validateMoodleSession } from './moodleAuthService';
+
 // Configuração dos endpoints da API
 const RUNTIME_API_BASE_URL =
   window.__SENAI_API_BASE_URL__ ||
@@ -7,7 +10,7 @@ const RUNTIME_API_BASE_URL =
 const API_BASE_URL =
   RUNTIME_API_BASE_URL ||
   import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.DEV ? '/api' : 'https://backend-311313028224.southamerica-east1.run.app/api');
+  '/api';
 
 const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '{{x-dev-user}}';
 
@@ -65,8 +68,14 @@ const getMoodleUserId = () => {
   return X_DEV_USER;
 };
 
-// Header padrão - usa user_id do Moodle se disponível
-const getHeaders = () => {
+// Header padr?o - usa user_id do Moodle se dispon?vel
+const getAuthToken = () => {
+  const accessToken = getToken();
+  if (accessToken) return accessToken;
+  return null;
+};
+
+const getHeaders = ({ json = true } = {}) => {
   let userId = getMoodleUserId();
   if (userId === 'SEU_VALOR_AQUI' || userId === '{{x-dev-user}}' || userId === 'undefined') {
     const runtimeUser = typeof window !== 'undefined' ? window.__MOODLE_USER__ : null;
@@ -75,13 +84,53 @@ const getHeaders = () => {
       userId = runtimeId;
     }
   }
+
   const headers = {
-    'Content-Type': 'application/json',
     'x-dev-user': userId,
-    'moodle_user_id': userId
+    moodle_user_id: userId,
   };
-  console.log('🔧 Headers sendo enviados:', headers);
+
+  if (json) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  const authToken = getAuthToken();
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  const logSafeHeaders = { ...headers };
+  if (logSafeHeaders.Authorization) {
+    logSafeHeaders.Authorization = 'Bearer ***';
+  }
+  console.log('?? Headers sendo enviados:', logSafeHeaders);
+
   return headers;
+};
+
+const refreshAccessTokenFromMoodle = async () => {
+  try {
+    const { token, origin, page } = getMoodleTokenFromURL();
+    if (!token) return false;
+    const result = await validateMoodleSession(token, origin || 'moodle', page || 'chat');
+    return !!(result?.ok && getToken());
+  } catch (_error) {
+    return false;
+  }
+};
+
+const fetchWithAuthRetry = async (buildRequest) => {
+  let { url, options } = buildRequest();
+  let response = await fetch(url, options);
+
+  if (response.status !== 401) return response;
+
+  console.warn('401 detectado, renovando token via Moodle exchange...');
+  const refreshed = await refreshAccessTokenFromMoodle();
+  if (!refreshed) return response;
+
+  ({ url, options } = buildRequest());
+  return fetch(url, options);
 };
 
 // POST - Iniciar nova conversa
@@ -179,9 +228,7 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
     
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'x-dev-user': getMoodleUserId()
-      },
+      headers: getHeaders({ json: false }),
     });
 
     console.log('📡 Resposta do stream:', {
@@ -322,16 +369,17 @@ export const getChatHistory = async () => {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const url = `${API_BASE_URL}/chat/history`;
-    const headers = {
-      'x-dev-user': getMoodleUserId(),
-    };
+    const headers = getHeaders({ json: false });
     console.log('📡 Buscando histórico de conversas...');
     
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-    });
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+        signal: controller.signal,
+      },
+    }));
 
     clearTimeout(timeoutId);
 
@@ -374,15 +422,16 @@ export const getChatHistory = async () => {
 export const loadChat = async (sessionId) => {
   try {
     const url = `${API_BASE_URL}/chat/history/${sessionId}`;
-    const headers = {
-      'x-dev-user': getMoodleUserId(),
-    };
+    const headers = getHeaders({ json: false });
     console.log('📡 Carregando conversa...', { url, method: 'GET', headers });
     
-    const response = await fetch(url, {
-      method: 'GET',
-      headers,
-    });
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+      },
+    }));
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -521,9 +570,7 @@ export const deleteChat = async (sessionId) => {
       
       const response = await fetch(endpoint, {
         method: 'DELETE',
-        headers: {
-          'x-dev-user': X_DEV_USER,
-        },
+        headers: getHeaders({ json: false }),
       });
 
       if (response.ok) {
