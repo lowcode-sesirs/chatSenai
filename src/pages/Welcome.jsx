@@ -1,7 +1,8 @@
 ﻿import { useState, useEffect, useRef } from 'react';
 import { Pencil, Square } from 'lucide-react';
 import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
-import { getMoodleUser } from '../services/moodleAuthService';
+import { clearMoodleUser, getMoodleUser } from '../services/moodleAuthService';
+import { clearToken } from '../services/tokenStore';
 import AIMessageContent from '../components/AIMessageContent';
 import HistorySidebar from '../components/HistorySidebar';
 import historicoIcon from '../assets/historico.png';
@@ -52,6 +53,117 @@ function Welcome() {
   const [copiedMessages, setCopiedMessages] = useState({}); // Rastreia mensagens copiadas
   // deletados são tratados pelo backend
   const messagesEndRef = useRef(null);
+  const ACTIVE_CHAT_ID_KEY = 'activeChatId';
+  const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
+  const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
+  const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
+  const latestActiveChatRef = useRef(null);
+  const latestIsDraftRef = useRef(false);
+
+  const buildExpandedChatParams = (chatId, isDraft = false) => {
+    const params = new URLSearchParams();
+    if (chatId) {
+      params.set('active_chat_id', chatId);
+      params.set('chat_id', chatId);
+      params.set('session_id', chatId);
+    }
+    if (isDraft) {
+      params.set('active_chat_draft', '1');
+    }
+    return params.toString();
+  };
+
+  const saveActiveChatState = (chatId, isDraft = false) => {
+    if (!chatId) return;
+    try {
+      localStorage.setItem(ACTIVE_CHAT_ID_KEY, chatId);
+      localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      localStorage.setItem(PENDING_EXPAND_CHAT_ID_KEY, chatId);
+      localStorage.setItem(PENDING_EXPAND_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      syncActiveChatInUrl(chatId, isDraft);
+      if (window.parent && window.parent !== window) {
+        const expandedParams = buildExpandedChatParams(chatId, isDraft);
+        const expandedUrl = `${window.location.origin}${window.location.pathname}?${expandedParams}`;
+        const payload = {
+          type: 'senai_active_chat',
+          chatId,
+          active_chat_id: chatId,
+          chat_id: chatId,
+          session_id: chatId,
+          expanded_chat_params: expandedParams,
+          expanded_chat_url: expandedUrl,
+          currentChatId: chatId,
+          isDraft
+        };
+        window.parent.postMessage(payload, '*');
+        // Compatibilidade com integrações antigas do widget maximizado.
+        window.parent.postMessage({ ...payload, type: 'senai_set_active_chat' }, '*');
+      }
+    } catch (error) {
+      console.warn('Falha ao salvar estado do chat ativo:', error);
+    }
+  };
+
+  const syncActiveChatInUrl = (chatId, isDraft = false) => {
+    try {
+      const url = new URL(window.location.href);
+      if (chatId) {
+        url.searchParams.set('active_chat_id', chatId);
+        url.searchParams.set('chat_id', chatId);
+        url.searchParams.set('session_id', chatId);
+      } else {
+        url.searchParams.delete('active_chat_id');
+        url.searchParams.delete('chat_id');
+        url.searchParams.delete('session_id');
+      }
+      if (isDraft) {
+        url.searchParams.set('active_chat_draft', '1');
+      } else {
+        url.searchParams.delete('active_chat_draft');
+      }
+      window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+    } catch (error) {
+      console.warn('Falha ao sincronizar active_chat_id na URL:', error);
+    }
+  };
+
+  const clearActiveChatState = () => {
+    try {
+      localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+      localStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+      syncActiveChatInUrl(null, false);
+    } catch (error) {
+      console.warn('Falha ao limpar estado do chat ativo:', error);
+    }
+  };
+
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    const activeChatId = currentChatId || sessionId || null;
+    latestActiveChatRef.current = activeChatId;
+    latestIsDraftRef.current = !hasUserMessages;
+  }, [messages, currentChatId, sessionId]);
+
+  useEffect(() => {
+    const handleParentExpandSync = (event) => {
+      const type = event?.data?.type;
+      if (!type) return;
+      if (!['senai_request_active_chat', 'senai_before_expand', 'senai_expand_clicked'].includes(type)) {
+        return;
+      }
+
+      const chatId = latestActiveChatRef.current;
+      const isDraft = !!latestIsDraftRef.current;
+      if (!chatId) return;
+
+      saveActiveChatState(chatId, isDraft);
+    };
+
+    window.addEventListener('message', handleParentExpandSync);
+    return () => window.removeEventListener('message', handleParentExpandSync);
+  }, []);
 
   // Scroll automático para o final quando novas mensagens chegam
   useEffect(() => {
@@ -208,7 +320,7 @@ function Welcome() {
   };
 
   // Função para formatar tempo relativo (ex: "há 2 minutos", "há 1 hora")
-  const formatRelativeTime = (timestamp) => {
+const formatRelativeTime = (timestamp) => {
     if (!timestamp) return 'Agora';
     
     const now = new Date();
@@ -233,7 +345,16 @@ function Welcome() {
       const year = messageTime.getFullYear();
       return `${day}/${month}/${year}`;
     }
-  };
+};
+
+const normalizeMessageForDisplay = (value) => {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/\n\s*\n+/g, '\n')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
 
   // Removido: carregamento de chats deletados do localStorage
 
@@ -306,6 +427,12 @@ function Welcome() {
       return backendTitle.trim();
     }
     return 'Sem titulo';
+  };
+
+  const getChatIdentifier = (chat) => {
+    if (!chat) return null;
+    // Prioriza o identificador de sessão (UUID) vindo do backend.
+    return chat.session_id || chat.chat_id || chat.id || null;
   };
 
   const extractMessagesFromChatData = (chatData, fallbackChat) => {
@@ -567,6 +694,7 @@ function Welcome() {
           
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
+          saveActiveChatState(currentSessionId, false);
 
           if (pendingTitleRename && chatTitle) {
             try {
@@ -911,12 +1039,10 @@ Status: Erro 500 - Problema interno do servidor`;
 
   // Função para deletar conversa do histórico
   const handleDeleteChat = async (chat) => {
-    const chatId = chat.id || chat.session_id || chat.chat_id;
+    const chatId = getChatIdentifier(chat);
 
     // Remove da lista local imediatamente
-    setChatHistory(prev => prev.filter(c => 
-      (c.id || c.session_id || c.chat_id) !== chatId
-    ));
+    setChatHistory(prev => prev.filter(c => getChatIdentifier(c) !== chatId));
     
     // Se a conversa deletada é a atual, limpa o chat
     if (currentChatId === chatId || sessionId === chatId) {
@@ -941,9 +1067,10 @@ Status: Erro 500 - Problema interno do servidor`;
     
     try {
       // Define o ID do chat atual
-      const chatId = chat.id || chat.session_id || chat.chat_id;
+      const chatId = getChatIdentifier(chat);
       setCurrentChatId(chatId);
       setSessionId(chatId);
+      saveActiveChatState(chatId, false);
       
       // Atualiza o título usando a mesma lógica do histórico
       setChatTitle(generateCorrectTitle(chat));
@@ -952,10 +1079,10 @@ Status: Erro 500 - Problema interno do servidor`;
       console.log('ðŸ“¡ Buscando conversa completa da API:', chatId);
         const chatData = await loadChat(chatId);
         
-        if (!chatData) {
-          console.log('âš ï¸ Conversa não encontrada no backend, iniciando nova.');
-          localStorage.removeItem('activeChatId');
-          setMessages([
+          if (!chatData) {
+            console.log('âš ï¸ Conversa não encontrada no backend, iniciando nova.');
+            clearActiveChatState();
+            setMessages([
             {
               id: 1,
               type: 'ai',
@@ -1001,7 +1128,7 @@ Status: Erro 500 - Problema interno do servidor`;
       console.error('âŒ Erro ao carregar conversa:', error);
       
       // Fallback: usar dados básicos do histórico
-      const chatId = chat.id || chat.session_id || chat.chat_id;
+      const chatId = getChatIdentifier(chat);
       setCurrentChatId(chatId);
       setSessionId(chatId);
       setChatTitle(generateCorrectTitle(chat));
@@ -1031,33 +1158,56 @@ Status: Erro 500 - Problema interno do servidor`;
     let ignore = false;
     const restoreActiveChat = async () => {
       let storedChatId = null;
+      let storedChatIsDraft = false;
       let localActiveChatId = null;
         try {
           const urlParams = new URLSearchParams(window.location.search);
+          const isEmbedded = window.parent && window.parent !== window;
           const explicitChatIdFromUrl =
             urlParams.get('active_chat_id') ||
-            urlParams.get('chat_id');
-          const legacyChatIdFromUrl =
-            urlParams.get('session_id') ||
-            urlParams.get('sid');
+            urlParams.get('chat_id') ||
+            urlParams.get('session_id');
+          const explicitDraftFromUrl = urlParams.get('active_chat_draft') === '1';
 
-          localActiveChatId = localStorage.getItem('activeChatId');
+          localActiveChatId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+          // Apenas a tela expandida deve consumir o pendingExpandChatId.
+          // No iframe, manter esse valor evita perder o chat correto ao clicar em expandir.
+          const pendingExpandChatId = !isEmbedded
+            ? localStorage.getItem(PENDING_EXPAND_CHAT_ID_KEY)
+            : null;
+          const pendingExpandIsDraft = !isEmbedded &&
+            localStorage.getItem(PENDING_EXPAND_CHAT_DRAFT_KEY) === '1';
+          storedChatIsDraft = localStorage.getItem(ACTIVE_CHAT_DRAFT_KEY) === '1';
 
           // Prioridade:
-          // 1) active_chat_id/chat_id explícitos
-          // 2) activeChatId do localStorage (sincronizado pelo widget ao criar "nova conversa")
-          // 3) parâmetros legados session_id/sid
-          storedChatId = explicitChatIdFromUrl || localActiveChatId || legacyChatIdFromUrl;
+          // 1) pendingExpandChatId (último chat escolhido no iframe para expandir)
+          // 2) active_chat_id/chat_id/session_id explícitos na URL do expandido
+          // 3) activeChatId local (fallback)
+          // Não usamos mais sid/session_id legado para evitar restaurar chat antigo por engano.
+          storedChatId = pendingExpandChatId || explicitChatIdFromUrl || localActiveChatId;
+          if (pendingExpandChatId) {
+            storedChatIsDraft = pendingExpandIsDraft;
+            localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+            localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+          }
+
+          if (!localActiveChatId && explicitChatIdFromUrl) {
+            storedChatIsDraft = explicitDraftFromUrl;
+          }
 
           if (storedChatId && storedChatId !== localActiveChatId) {
-            localStorage.setItem('activeChatId', storedChatId);
+            saveActiveChatState(storedChatId, false);
+            storedChatIsDraft = false;
+          } else if (storedChatId && !explicitChatIdFromUrl) {
+            // Garante que a URL do chat expandido reflita o chat ativo restaurado.
+            syncActiveChatInUrl(storedChatId, storedChatIsDraft);
           }
         } catch (error) {
           console.warn('Falha ao ler active_chat_id da URL:', error);
         }
 
       try {
-        if (!storedChatId) storedChatId = localStorage.getItem('activeChatId');
+        if (!storedChatId) storedChatId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
       } catch (error) {
         console.warn('Falha ao ler activeChatId do localStorage:', error);
         return;
@@ -1066,6 +1216,26 @@ Status: Erro 500 - Problema interno do servidor`;
       if (!storedChatId) return;
       if (storedChatId === currentChatId || storedChatId === sessionId) return;
 
+      if (storedChatIsDraft) {
+        console.log('Restaurando chat novo vazio (rascunho).');
+        setCurrentChatId(null);
+        setSessionId(storedChatId);
+        setChatTitle('');
+        setMessages([
+          {
+            id: 1,
+            type: 'ai',
+            text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+            isWelcome: true,
+            timestamp: new Date(),
+            messageId: 'welcome-msg'
+          }
+        ]);
+        setFeedbackGiven({});
+        setCopiedMessages({});
+        return;
+      }
+
       try {
         console.log('Tentando restaurar chat ativo do storage:', storedChatId);
         const history = await getChatHistory();
@@ -1073,7 +1243,7 @@ Status: Erro 500 - Problema interno do servidor`;
 
         if (Array.isArray(history)) {
           const match = history.find((chat) => {
-            const chatId = chat.id || chat.session_id || chat.chat_id;
+            const chatId = getChatIdentifier(chat);
             return chatId === storedChatId;
           });
 
@@ -1089,7 +1259,7 @@ Status: Erro 500 - Problema interno do servidor`;
 
           if (!chatData) {
             console.log('Chat inexistente no backend, limpando activeChatId.');
-            localStorage.removeItem('activeChatId');
+            clearActiveChatState();
             return;
           }
 
@@ -1136,23 +1306,8 @@ Status: Erro 500 - Problema interno do servidor`;
     setCurrentChatId(null);
 
     // Atualiza imediatamente o chat ativo para o widget maximizado abrir limpo
-    try {
-      localStorage.setItem('activeChatId', newSessionId);
-    } catch (error) {
-      console.warn('Falha ao salvar novo activeChatId no localStorage:', error);
-    }
+    saveActiveChatState(newSessionId, true);
 
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage(
-          { type: 'senai_active_chat', chatId: newSessionId },
-          '*'
-        );
-      }
-    } catch (error) {
-      console.warn('Falha ao enviar novo activeChatId via postMessage:', error);
-    }
-    
     // Reseta as mensagens para o estado inicial
     setMessages([
       {
@@ -1184,27 +1339,13 @@ Status: Erro 500 - Problema interno do servidor`;
 
   useEffect(() => {
     const hasUserMessages = messages.some((msg) => msg.type === 'user');
-    if (!hasUserMessages) return;
-
     const activeChatId = currentChatId || sessionId;
     if (!activeChatId) return;
+    // Evita sobrescrever o chat ativo salvo ao abrir a tela expandida:
+    // no primeiro render ainda não restauramos o chat real e o sessionId é temporário.
+    if (!currentChatId && !hasUserMessages) return;
 
-    try {
-      localStorage.setItem('activeChatId', activeChatId);
-    } catch (error) {
-      console.warn('Falha ao salvar activeChatId no localStorage:', error);
-    }
-
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage(
-          { type: 'senai_active_chat', chatId: activeChatId },
-          '*'
-        );
-      }
-    } catch (error) {
-      console.warn('Falha ao enviar activeChatId via postMessage:', error);
-    }
+    saveActiveChatState(activeChatId, !hasUserMessages);
   }, [messages, currentChatId, sessionId]);
 
   const handleTitleChange = (e) => {
@@ -1264,6 +1405,20 @@ Status: Erro 500 - Problema interno do servidor`;
   };
 
   const handleConfirmLogout = () => {
+    if (!moodleUser?.fromMoodle) {
+      clearToken();
+      clearMoodleUser();
+      try {
+        sessionStorage.removeItem('moodle_token');
+        localStorage.removeItem('moodle_token');
+      } catch (_error) {
+        // noop
+      }
+      setIsLogoutModalOpen(false);
+      window.location.reload();
+      return;
+    }
+
     const moodleUrl = getMoodleReturnUrl();
     setIsLogoutModalOpen(false);
     window.location.href = moodleUrl;
@@ -1550,7 +1705,9 @@ Status: Erro 500 - Problema interno do servidor`;
                           <span className="text-gray-400 text-sm"> · {formatRelativeTime(msg.timestamp)}</span>
                         </div>
                         
-                        <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                        <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-line break-words">
+                          {normalizeMessageForDisplay(msg.text)}
+                        </p>
                         
                         {/* Footer com botão copiar */}
                         <div className="flex items-center justify-end mt-4">

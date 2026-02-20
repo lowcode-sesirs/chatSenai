@@ -1,4 +1,50 @@
-import { clearToken, setToken } from './tokenStore';
+import { clearToken, getToken, setToken } from './tokenStore';
+
+const clearStoredMoodleIdentity = () => {
+  try {
+    sessionStorage.removeItem('moodle_user');
+    localStorage.removeItem('moodle_user');
+  } catch (_error) {
+    // noop
+  }
+
+  try {
+    if (typeof window !== 'undefined') {
+      delete window.__MOODLE_USER__;
+    }
+  } catch (_error) {
+    // noop
+  }
+};
+
+const clearStoredMoodleToken = () => {
+  try {
+    sessionStorage.removeItem('moodle_token');
+  } catch (_error) {
+    // noop
+  }
+  try {
+    localStorage.removeItem('moodle_token');
+  } catch (_error) {
+    // noop
+  }
+};
+
+const clearMoodleTokenFromUrl = () => {
+  try {
+    if (typeof window === 'undefined') return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('moodle_token') && !url.searchParams.has('token')) return;
+    url.searchParams.delete('moodle_token');
+    url.searchParams.delete('token');
+    window.history.replaceState({}, '', url.toString());
+  } catch (_error) {
+    // noop
+  }
+};
+
+let exchangeInFlight = null;
+let exchangeInFlightToken = null;
 // Serviço de autenticação Moodle
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 
   '/api';
@@ -46,15 +92,29 @@ export const getMoodleTokenFromURL = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const tokenFromUrl = urlParams.get('moodle_token') || urlParams.get('token');
   const tokenFromSession = sessionStorage.getItem('moodle_token');
+  const isEmbedded = typeof window !== 'undefined' && window.parent && window.parent !== window;
   let tokenFromLocal = null;
   try {
     tokenFromLocal = localStorage.getItem('moodle_token');
   } catch (error) {
     console.warn('Erro ao ler moodle_token do localStorage:', error);
   }
-  const resolvedToken = tokenFromUrl || tokenFromSession || tokenFromLocal;
+  // No iframe, evita fallback para localStorage (pode carregar token de outra conta).
+  // Se houver token na URL, ele deve prevalecer sobre sessionStorage.
+  const resolvedToken = isEmbedded
+    ? (tokenFromUrl || tokenFromSession || null)
+    : (tokenFromUrl || tokenFromSession || tokenFromLocal);
 
   if (tokenFromUrl) {
+    const hasTokenChanged =
+      (tokenFromSession && tokenFromSession !== tokenFromUrl) ||
+      (tokenFromLocal && tokenFromLocal !== tokenFromUrl);
+
+    if (hasTokenChanged) {
+      clearToken();
+      clearStoredMoodleIdentity();
+    }
+
     sessionStorage.setItem('moodle_token', tokenFromUrl);
     try {
       localStorage.setItem('moodle_token', tokenFromUrl);
@@ -76,8 +136,17 @@ export const getMoodleTokenFromURL = () => {
  * O backend Python irá validar com o Moodle se o token é válido
  */
 export const validateMoodleSession = async (moodleToken, origin = 'moodle', page = 'chat') => {
+  if (exchangeInFlight && exchangeInFlightToken === moodleToken) {
+    return exchangeInFlight;
+  }
+
+  const runExchange = async () => {
   try {
     console.log('Validando sessao Moodle...');
+    if (!moodleToken) {
+      return { ok: false, error: 'missing_moodle_token' };
+    }
+    const hadAccessTokenBeforeExchange = !!getToken();
     if (typeof window !== 'undefined' && moodleToken) {
       sessionStorage.setItem('moodle_token', moodleToken);
     }
@@ -85,9 +154,7 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
     const apiRoot = API_BASE_URL.replace(/\/+$/, '');
     const baseNoApi = apiRoot.replace(/\/api$/, '');
     const exchangeUrls = [
-      `${apiRoot}/auth/moodle/Exchange`,
       `${apiRoot}/auth/moodle/exchange`,
-      `${baseNoApi}/api/auth/moodle/Exchange`,
       `${baseNoApi}/api/auth/moodle/exchange`,
     ];
 
@@ -109,11 +176,23 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
         });
 
         if (!response.ok) {
+          let errorDetail = '';
+          try {
+            errorDetail = await response.text();
+          } catch (_error) {
+            // noop
+          }
           if (response.status === 401) {
-            clearToken();
+            console.warn('Exchange Moodle retornou 401:', errorDetail || response.statusText);
+            // Evita derrubar sessao já válida quando uma segunda tentativa concorrente falha.
+            if (!hadAccessTokenBeforeExchange) {
+              clearToken();
+              clearStoredMoodleToken();
+              clearMoodleTokenFromUrl();
+            }
             return { ok: false, error: 'invalid_session' };
           }
-          lastError = new Error(`Erro ${response.status}: ${response.statusText}`);
+          lastError = new Error(`Erro ${response.status}: ${errorDetail || response.statusText}`);
           continue;
         }
 
@@ -126,6 +205,8 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
 
     if (!data) {
       clearToken();
+      clearStoredMoodleToken();
+      clearMoodleTokenFromUrl();
       throw lastError || new Error('Falha no exchange Moodle');
     }
 
@@ -134,6 +215,8 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
       setToken(accessToken);
     } else {
       clearToken();
+      clearStoredMoodleToken();
+      clearMoodleTokenFromUrl();
       return { ok: false, error: 'missing_access_token' };
     }
 
@@ -150,6 +233,14 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
     console.error('Erro ao validar sessao Moodle:', error);
     return { ok: false, error: error.message };
   }
+  };
+
+  exchangeInFlightToken = moodleToken;
+  exchangeInFlight = runExchange().finally(() => {
+    exchangeInFlight = null;
+    exchangeInFlightToken = null;
+  });
+  return exchangeInFlight;
 };
 
 /**

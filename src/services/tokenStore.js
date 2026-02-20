@@ -4,6 +4,8 @@ let accessToken = null;
 
 const canUseSessionStorage = () => typeof window !== 'undefined' && !!window.sessionStorage;
 const canUseLocalStorage = () => typeof window !== 'undefined' && !!window.localStorage;
+const isEmbeddedIframe = () =>
+  typeof window !== 'undefined' && window.parent && window.parent !== window;
 
 export const getToken = () => {
   if (accessToken) return accessToken;
@@ -16,7 +18,8 @@ export const getToken = () => {
     }
   }
 
-  if (canUseLocalStorage()) {
+  // Em iframe do Moodle, evita reaproveitar token de outro contexto/conta via localStorage.
+  if (!isEmbeddedIframe() && canUseLocalStorage()) {
     const storedLocal = localStorage.getItem(TOKEN_KEY);
     if (storedLocal) {
       accessToken = storedLocal;
@@ -40,7 +43,8 @@ export const setToken = (token) => {
     }
   }
 
-  if (canUseLocalStorage()) {
+  // Em iframe, persiste somente em sessionStorage para reduzir vazamento entre contas.
+  if (!isEmbeddedIframe() && canUseLocalStorage()) {
     if (accessToken) {
       localStorage.setItem(TOKEN_KEY, accessToken);
     } else {

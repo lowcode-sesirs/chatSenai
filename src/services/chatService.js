@@ -14,6 +14,16 @@ const API_BASE_URL =
 
 const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '{{x-dev-user}}';
 
+const normalizeMessageForRequest = (value) => {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/\n\s*\n+/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
 console.log('🔧 Configuração da API:', {
   DEV: import.meta.env.DEV,
   API_BASE_URL,
@@ -120,6 +130,11 @@ const refreshAccessTokenFromMoodle = async () => {
 };
 
 const fetchWithAuthRetry = async (buildRequest) => {
+  // Evita primeira chamada sem Authorization quando ainda existe moodle_token para exchange.
+  if (!getToken()) {
+    await refreshAccessTokenFromMoodle();
+  }
+
   let { url, options } = buildRequest();
   let response = await fetch(url, options);
 
@@ -136,9 +151,10 @@ const fetchWithAuthRetry = async (buildRequest) => {
 // POST - Iniciar nova conversa
 export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
   try {
+    const normalizedMessage = normalizeMessageForRequest(message);
     const url = `${API_BASE_URL}/chat`;
     const payload = {
-      message,
+      message: normalizedMessage,
       course_external_id: courseExternalId,
       language: 'pt-BR', // ✅ Força respostas em português
     };
@@ -151,11 +167,14 @@ export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
       headers
     });
     
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-    });
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(payload),
+      },
+    }));
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Erro desconhecido');
@@ -188,14 +207,19 @@ export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
 // POST - Enviar mensagem em conversa existente
 export const sendChatMessage = async (sessionId, message) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/chat/${sessionId}/message`, {
-      method: 'POST',
-      headers: getHeaders(),
-      body: JSON.stringify({
-        message,
-        language: 'pt-BR', // ✅ Força respostas em português
-      }),
-    });
+    const normalizedMessage = normalizeMessageForRequest(message);
+    const url = `${API_BASE_URL}/chat/${sessionId}/message`;
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          message: normalizedMessage,
+          language: 'pt-BR',
+        }),
+      },
+    }));
 
     if (!response.ok) {
       throw new Error('Erro ao enviar mensagem');
@@ -226,10 +250,13 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
     console.log('🌊 Iniciando streaming para sessão:', sessionId);
     console.log('🔗 URL do stream:', url);
     
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: getHeaders({ json: false }),
-    });
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+      },
+    }));
 
     console.log('📡 Resposta do stream:', {
       status: response.status,
