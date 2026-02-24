@@ -125,7 +125,16 @@ function Welcome() {
       } else {
         url.searchParams.delete('active_chat_draft');
       }
+      const nextRoute = `${url.pathname}${url.search}${url.hash || ''}`;
       window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+      try {
+        window.dispatchEvent(new CustomEvent('senai_route_sync', { detail: { route: nextRoute } }));
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'CHAT_ROUTE_UPDATE', route: nextRoute }, MOODLE_PARENT_ORIGIN);
+        }
+      } catch (_error) {
+        // noop
+      }
     } catch (error) {
       console.warn('Falha ao sincronizar active_chat_id na URL:', error);
     }

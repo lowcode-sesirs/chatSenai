@@ -570,10 +570,13 @@ export const saveChat = async (chatData) => {
     const query = params.toString();
     const url = `${API_BASE_URL}/chat/history${query ? `?${query}` : ''}`;
 
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: getHeaders(),
-    });
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+      },
+    }));
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Erro desconhecido');
