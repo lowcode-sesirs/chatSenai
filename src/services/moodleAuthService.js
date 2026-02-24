@@ -1,6 +1,11 @@
+import { clearToken, setToken } from './tokenStore';
+
 // Serviço de autenticação Moodle
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 
   (import.meta.env.DEV ? '/api' : 'https://backend-311313028224.southamerica-east1.run.app/api');
+
+const isEmbeddedIframe = () =>
+  typeof window !== 'undefined' && window.parent && window.parent !== window;
 
 const decodeBase64Url = (value) => {
   if (!value) return null;
@@ -57,47 +62,93 @@ export const getMoodleTokenFromURL = () => {
  */
 export const validateMoodleSession = async (moodleToken, origin = 'moodle', page = 'chat') => {
   try {
-    console.log('🔐 Validando sessão Moodle...');
-    
-    const response = await fetch(`${API_BASE_URL}/moodle/session/handshake`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        moodle_session_token: moodleToken,
-        origin: origin,
-        page: page
-      }),
-    });
+    console.log('Validando sessao Moodle...');
+
+    if (!moodleToken) {
+      return { ok: false, error: 'missing_moodle_token' };
+    }
+
+    try {
+      sessionStorage.setItem('moodle_token', moodleToken);
+    } catch (_error) {
+      // noop
+    }
+
+    const apiRoot = API_BASE_URL.replace(/\/+$/, '');
+    const baseNoApi = apiRoot.replace(/\/api$/, '');
+    const exchangeUrls = [
+      `${apiRoot}/auth/moodle/exchange`,
+      `${baseNoApi}/api/auth/moodle/exchange`,
+    ];
+
+    let response = null;
+    let lastError = null;
+
+    for (const url of exchangeUrls) {
+      try {
+        const candidate = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            moodle_token: moodleToken,
+            origin,
+            page,
+          }),
+        });
+
+        if (candidate.status === 404) {
+          lastError = new Error(`Endpoint nao encontrado: ${url}`);
+          continue;
+        }
+
+        response = candidate;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (!response) {
+      throw lastError || new Error('Falha no exchange Moodle');
+    }
 
     if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
       if (response.status === 401) {
-        console.error('❌ Sessão Moodle inválida ou expirada');
+        clearToken();
+        console.warn('Exchange Moodle retornou 401:', errorText || response.statusText);
         return { ok: false, error: 'invalid_session' };
       }
-      throw new Error(`Erro ${response.status}: ${response.statusText}`);
+      throw new Error(`Erro ${response.status}: ${errorText || response.statusText}`);
     }
 
     const data = await response.json();
-    console.log('✅ Sessão Moodle validada:', data);
-    
+    const accessToken = data?.access_token || data?.token || null;
+    if (!accessToken) {
+      clearToken();
+      return { ok: false, error: 'missing_access_token' };
+    }
+
+    setToken(accessToken);
+
+    const user = data?.user || data?.profile || data || {};
+    console.log('Sessao Moodle validada com exchange');
+
     return {
-      ok: data.ok || data.valid,
-      userId: data.user_id,
-      userName: data.user_name,
-      userEmail: data.user_email,
-      isAdmin: data.is_admin || data.isAdmin || false
+      ok: true,
+      userId: user.userId || user.user_id || user.id || user.sub || null,
+      userName: user.userName || user.user_name || user.fullname || user.name || null,
+      userEmail: user.userEmail || user.user_email || user.email || null,
+      isAdmin: !!(user.is_admin || user.isAdmin || user.admin),
+      fromMoodle: true
     };
   } catch (error) {
-    console.error('❌ Erro ao validar sessão Moodle:', error);
+    console.error('Erro ao validar sessao Moodle:', error);
     return { ok: false, error: error.message };
   }
 };
-
-/**
- * Verifica se o usuário veio do Moodle
- */
 export const isFromMoodle = () => {
   const { token, origin } = getMoodleTokenFromURL();
   return !!(token && origin === 'moodle');
@@ -125,10 +176,12 @@ export const storeMoodleUser = (userData) => {
   }
 
   sessionStorage.setItem('moodle_user', JSON.stringify(normalizedUser));
-  try {
-    localStorage.setItem('moodle_user', JSON.stringify(normalizedUser));
-  } catch (error) {
-    console.warn('Nao foi possivel salvar moodle_user no localStorage:', error);
+  if (!isEmbeddedIframe()) {
+    try {
+      localStorage.setItem('moodle_user', JSON.stringify(normalizedUser));
+    } catch (error) {
+      console.warn('Nao foi possivel salvar moodle_user no localStorage:', error);
+    }
   }
   try {
     if (typeof window !== 'undefined') {
@@ -157,7 +210,9 @@ export const getMoodleUser = () => {
       try {
         const serialized = JSON.stringify(normalizedUser);
         sessionStorage.setItem('moodle_user', serialized);
-        localStorage.setItem('moodle_user', serialized);
+        if (!isEmbeddedIframe()) {
+          localStorage.setItem('moodle_user', serialized);
+        }
       } catch (error) {
         console.warn('Nao foi possivel sincronizar moodle_user do runtime:', error);
       }
@@ -191,22 +246,26 @@ export const getMoodleUser = () => {
 
   const sessionData = sessionStorage.getItem('moodle_user');
   if (sessionData) {
-    try {
-      localStorage.setItem('moodle_user', sessionData);
-    } catch (error) {
-      console.warn('Nao foi possivel sincronizar moodle_user no localStorage:', error);
+    if (!isEmbeddedIframe()) {
+      try {
+        localStorage.setItem('moodle_user', sessionData);
+      } catch (error) {
+        console.warn('Nao foi possivel sincronizar moodle_user no localStorage:', error);
+      }
     }
     return JSON.parse(sessionData);
   }
 
-  try {
-    const localData = localStorage.getItem('moodle_user');
-    if (localData) {
-      sessionStorage.setItem('moodle_user', localData);
-      return JSON.parse(localData);
+  if (!isEmbeddedIframe()) {
+    try {
+      const localData = localStorage.getItem('moodle_user');
+      if (localData) {
+        sessionStorage.setItem('moodle_user', localData);
+        return JSON.parse(localData);
+      }
+    } catch (error) {
+      console.warn('Nao foi possivel ler moodle_user do localStorage:', error);
     }
-  } catch (error) {
-    console.warn('Nao foi possivel ler moodle_user do localStorage:', error);
   }
 
   return null;

@@ -1,6 +1,6 @@
 ﻿import { useState, useEffect, useRef } from 'react';
-import { Pencil, Square, ThumbsDown, ThumbsUp } from 'lucide-react';
-import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
+import { Pencil, Square } from 'lucide-react';
+import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, deleteChat } from '../services/chatService';
 import { getMoodleUser } from '../services/moodleAuthService';
 import AIMessageContent from '../components/AIMessageContent';
 import HistorySidebar from '../components/HistorySidebar';
@@ -9,6 +9,8 @@ import questionIcon from '../assets/question.png';
 import fiergsSenaiLogo from '../assets/senai.png';
 import vectorLogo from '../assets/button-cursor.svg';
 import ultimasConversas from '../assets/Vector.png';
+import likeIcon from '../assets/like.png';
+import dislikeIcon from '../assets/thumb_down_alt.png';
 import sendIcon from '../assets/Send.solid.png';
 import copiarIcon from '../assets/copiar.png';
 import novaConversaIcon from '../assets/novaConversa.png';
@@ -454,52 +456,6 @@ function Welcome() {
   };
 
   // Função para salvar conversa automaticamente
-  const saveCurrentChat = async () => {
-    try {
-      // Só salva se tiver mensagens além da mensagem de boas-vindas
-      const userMessages = messages.filter(msg => msg.type === 'user');
-      if (userMessages.length === 0) return;
-
-      const chatData = {
-        session_id: sessionId,
-        title: chatTitle, // âœ… Sempre usa o título atual (padrão ou editado)
-        messages: messages.filter(msg => !msg.isWelcome), // Remove mensagem de boas-vindas
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-
-      console.log('ðŸ’¾ Salvando conversa automaticamente:', chatData);
-      console.log('ðŸ“ Título sendo salvo:', chatTitle);
-      
-      const result = await saveChat(chatData);
-      
-      // Verifica se salvou com sucesso (não retornou ok: false)
-      if (result && result.ok === false) {
-        console.log('âš ï¸ Salvamento não disponível (endpoint não implementado)');
-      } else if (result) {
-        console.log('âœ… Conversa salva com sucesso!');
-        // Força recarregamento do histórico na próxima abertura
-        setHistoryLoaded(false);
-      }
-    } catch (error) {
-      console.warn('âš ï¸ Não foi possível salvar conversa:', error.message);
-      // Não é crítico, continua funcionando normalmente
-    }
-  };
-
-  // Salvar conversa automaticamente quando há mudanças nas mensagens
-  useEffect(() => {
-    // Debounce: salva 2 segundos após a última mudança
-    const timeoutId = setTimeout(() => {
-      if (messages.length > 1) { // Só salva se tiver mais que a mensagem de boas-vindas
-        saveCurrentChat();
-      }
-    }, 2000);
-
-    return () => clearTimeout(timeoutId);
-  }, [messages, chatTitle, sessionId]);
-
-
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -1410,41 +1366,39 @@ Status: Erro 500 - Problema interno do servidor`;
             <div className="flex flex-col items-center gap-4 px-4">
               {/* Card 1 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl text-center items-center flex flex-col w-full max-w-[640px] overflow-hidden"
+                className="bg-[#FFFFFF] rounded-2xl text-left flex flex-col w-full max-w-[640px] overflow-hidden"
                 style={{ 
                   minHeight: '178px', 
                   padding: '16px',
                   boxShadow: '0px 0px 12px 0px #C3E9FC80'
                 }}
               >
-                <div className="flex items-center justify-center gap-3 mb-2 w-full">
-                  <div
-                    className="bg-[#FFEFEA] flex items-center justify-center"
-                    style={{
-                      width: '40px',
-                      height: '40px',
-                      borderRadius: '8px',
-                      padding: '4px',
-                      opacity: 1
-                    }}
-                  >
-                    <img src={questionIcon} alt="Question" className="w-6 h-6" />
-                  </div>
-                  <h3
-                    className="text-[#2D2D2D]"
-                    style={{
-                      fontFamily: 'Inter, sans-serif',
-                      fontWeight: 700,
-                      fontSize: '14px',
-                      lineHeight: '100%',
-                      letterSpacing: '0.1px'
-                    }}
-                  >
-                    Quero ajudar você a tirar suas dúvidas
-                  </h3>
+                <div 
+                  className="bg-[#FFEFEA] flex items-center justify-center mb-3" 
+                  style={{ 
+                    width: '40px', 
+                    height: '40px',
+                    borderRadius: '8px',
+                    padding: '4px',
+                    opacity: 1
+                  }}
+                >
+                  <img src={questionIcon} alt="Question" className="w-6 h-6" />
                 </div>
+                <h3 
+                  className="text-[#2D2D2D] mb-2"
+                  style={{ 
+                    fontFamily: 'Inter, sans-serif',
+                    fontWeight: 700,
+                    fontSize: '14px',
+                    lineHeight: '100%',
+                    letterSpacing: '0.1px'
+                  }}
+                >
+                  Quero ajudar você a tirar suas dúvidas
+                </h3>
                 <p 
-                  className="text-[#BDBDBD] break-words text-center"
+                  className="text-[#BDBDBD] break-words"
                   style={{ 
                     fontFamily: 'Inter, sans-serif',
                     fontWeight: 400,
@@ -1459,7 +1413,7 @@ Status: Erro 500 - Problema interno do servidor`;
 
               {/* Card 2 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-center items-center flex flex-col w-full max-w-[640px] hover:bg-[#FFEFEA]"
+                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-left flex flex-col w-full max-w-[640px] hover:bg-[#FFEFEA]"
                 style={{ 
                   height: 'fit-content', 
                   padding: '16px',
@@ -1467,7 +1421,7 @@ Status: Erro 500 - Problema interno do servidor`;
                 }}
                 onClick={() => setIsHistoryOpen(true)}
               >
-                <div className="flex items-center justify-center gap-3 w-full">
+                <div className="flex items-center gap-3">
                   <div 
                     className="bg-[#FFEFEA] flex items-center justify-center" 
                     style={{ 
@@ -1586,10 +1540,8 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Dislike */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, false)}
-                                  title="não gostei"
-                                  aria-label="não gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`relative group transition-all flex items-center justify-center w-5 h-5 ${
+                                  className={`transition-all ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -1601,25 +1553,24 @@ Status: Erro 500 - Problema interno do servidor`;
                                     margin: '0'
                                   }}
                                 >
-                                  <ThumbsDown
-                                    size={16}
-                                    className={
-                                      feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
-                                        ? 'text-[#e84910]'
-                                        : 'text-[#9ca3af]'
-                                    }
+                                  <img 
+                                    src={dislikeIcon} 
+                                    alt="Dislike" 
+                                    style={{ 
+                                      width: '14.89px', 
+                                      height: '12.92px',
+                                      display: 'block',
+                                      filter: feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
+                                        ? 'brightness(0) saturate(100%) invert(39%) sepia(88%) saturate(3066%) hue-rotate(9deg) brightness(97%) contrast(96%)'
+                                        : 'none'
+                                    }} 
                                   />
-                                  <span className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                    não gostei
-                                  </span>
                                 </button>
                                 {/* Like */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, true)}
-                                  title="gostei"
-                                  aria-label="gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`relative group transition-all flex items-center justify-center w-5 h-5 ${
+                                  className={`transition-all ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -1631,17 +1582,18 @@ Status: Erro 500 - Problema interno do servidor`;
                                     margin: '0'
                                   }}
                                 >
-                                  <ThumbsUp
-                                    size={16}
-                                    className={
-                                      feedbackGiven[msg.messageId]?.type === 'like' && feedbackGiven[msg.messageId]?.status === 'sent'
-                                        ? 'text-[#4f8fd9]'
-                                        : 'text-[#9ca3af]'
-                                    }
+                                  <img 
+                                    src={likeIcon} 
+                                    alt="Like" 
+                                    style={{ 
+                                      width: '14.89px', 
+                                      height: '12.92px',
+                                      display: 'block',
+                                      filter: feedbackGiven[msg.messageId]?.type === 'like' && feedbackGiven[msg.messageId]?.status === 'sent'
+                                        ? 'brightness(0) saturate(100%) invert(59%) sepia(98%) saturate(1946%) hue-rotate(201deg) brightness(97%) contrast(94%)'
+                                        : 'none'
+                                    }} 
                                   />
-                                  <span className="pointer-events-none absolute -top-7 left-1/2 -translate-x-1/2 rounded bg-gray-900 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100">
-                                    gostei
-                                  </span>
                                 </button>
                                 {/* Copiar */}
                                 <button 

@@ -1,3 +1,5 @@
+import { getToken } from './tokenStore';
+
 // Configuração dos endpoints da API
 const RUNTIME_API_BASE_URL =
   window.__SENAI_API_BASE_URL__ ||
@@ -10,6 +12,37 @@ const API_BASE_URL =
   (import.meta.env.DEV ? '/api' : 'https://backend-311313028224.southamerica-east1.run.app/api');
 
 const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '{{x-dev-user}}';
+
+const logHandshakeSnapshot = (context, url, headers, extra = {}) => {
+  try {
+    const moodleTokenFromUrl = new URLSearchParams(window.location.search).get('moodle_token');
+    const moodleTokenFromSession = sessionStorage.getItem('moodle_token');
+    const moodleUserRaw = sessionStorage.getItem('moodle_user');
+    let moodleUser = null;
+    try {
+      moodleUser = moodleUserRaw ? JSON.parse(moodleUserRaw) : null;
+    } catch (_error) {
+      moodleUser = moodleUserRaw;
+    }
+
+    const safeHeaders = { ...(headers || {}) };
+    if (safeHeaders.Authorization) {
+      safeHeaders.Authorization = 'Bearer ***';
+    }
+
+    console.log(`🤝 Handshake (${context})`, {
+      url,
+      headers: safeHeaders,
+      moodleTokenInUrl: !!moodleTokenFromUrl,
+      moodleTokenInSession: !!moodleTokenFromSession,
+      moodleUser,
+      runtimeMoodleUser: typeof window !== 'undefined' ? window.__MOODLE_USER__ || null : null,
+      ...extra,
+    });
+  } catch (error) {
+    console.warn(`Falha ao registrar handshake (${context}):`, error);
+  }
+};
 
 console.log('🔧 Configuração da API:', {
   DEV: import.meta.env.DEV,
@@ -80,7 +113,15 @@ const getHeaders = () => {
     'x-dev-user': userId,
     'moodle_user_id': userId
   };
-  console.log('🔧 Headers sendo enviados:', headers);
+  const accessToken = getToken();
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
+  }
+  const logSafeHeaders = { ...headers };
+  if (logSafeHeaders.Authorization) {
+    logSafeHeaders.Authorization = 'Bearer ***';
+  }
+  console.log('?? Headers sendo enviados:', logSafeHeaders);
   return headers;
 };
 
@@ -101,6 +142,7 @@ export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
       payload,
       headers
     });
+    logHandshakeSnapshot('before /chat', url, headers, { payload });
     
     const response = await fetch(url, {
       method: 'POST',
@@ -179,9 +221,7 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
     
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'x-dev-user': getMoodleUserId()
-      },
+      headers: getHeaders(),
     });
 
     console.log('📡 Resposta do stream:', {
@@ -322,10 +362,9 @@ export const getChatHistory = async () => {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const url = `${API_BASE_URL}/chat/history`;
-    const headers = {
-      'x-dev-user': getMoodleUserId(),
-    };
+    const headers = getHeaders();
     console.log('📡 Buscando histórico de conversas...');
+    logHandshakeSnapshot('before /chat/history', url, headers);
     
     const response = await fetch(url, {
       method: 'GET',
@@ -374,9 +413,7 @@ export const getChatHistory = async () => {
 export const loadChat = async (sessionId) => {
   try {
     const url = `${API_BASE_URL}/chat/history/${sessionId}`;
-    const headers = {
-      'x-dev-user': getMoodleUserId(),
-    };
+    const headers = getHeaders();
     console.log('📡 Carregando conversa...', { url, method: 'GET', headers });
     
     const response = await fetch(url, {
@@ -420,47 +457,6 @@ export const renameChat = async (sessionId, title) => {
   } catch (error) {
     console.error('Erro ao renomear conversa:', error);
     throw error;
-  }
-};
-
-// POST - Salvar conversa no histórico
-export const saveChat = async (chatData) => {
-  try {
-    console.log('?? Tentando salvar conversa:', chatData.session_id);
-
-    const params = new URLSearchParams();
-    if (chatData?.session_id) params.set('session_id', chatData.session_id);
-    if (chatData?.title) params.set('title', chatData.title);
-    const query = params.toString();
-    const url = `${API_BASE_URL}/chat/history${query ? `?${query}` : ''}`;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: getHeaders(),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Erro desconhecido');
-      console.warn(`?? Erro ${response.status} ao salvar conversa:`, errorText);
-
-      // Se o endpoint n?o existe (404), n?o ? cr?tico
-      if (response.status === 404) {
-        console.log('?? Endpoint /chat/save n?o implementado no backend');
-        return { ok: false, message: 'Endpoint n?o implementado' };
-      }
-
-      throw new Error(`Erro ${response.status}: ${errorText}`);
-    }
-
-    const data = await response.json();
-    console.log('? Conversa salva com sucesso!');
-    return data;
-  } catch (error) {
-    console.error('? Erro ao salvar conversa:', error.message);
-
-    // N?o propaga o erro para n?o quebrar a aplica??o
-    // O salvamento ? opcional
-    return { ok: false, error: error.message };
   }
 };
 
@@ -521,9 +517,7 @@ export const deleteChat = async (sessionId) => {
       
       const response = await fetch(endpoint, {
         method: 'DELETE',
-        headers: {
-          'x-dev-user': X_DEV_USER,
-        },
+        headers: getHeaders(),
       });
 
       if (response.ok) {
