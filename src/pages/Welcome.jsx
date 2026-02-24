@@ -1,4 +1,5 @@
-﻿import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Pencil, Square } from 'lucide-react';
 import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
 import { clearMoodleUser, getMoodleUser } from '../services/moodleAuthService';
@@ -16,7 +17,10 @@ import sendIcon from '../assets/Send.solid.png';
 import copiarIcon from '../assets/copiar.png';
 import novaConversaIcon from '../assets/novaConversa.png';
 
+const MOODLE_PARENT_ORIGIN = 'https://pocsesi-rs.asdnet.com.br';
+
 function Welcome() {
+  const location = useLocation();
   const [message, setMessage] = useState('');
   const [moodleUser, setMoodleUser] = useState(() => getMoodleUser());
   const [chatTitle, setChatTitle] = useState('');
@@ -95,9 +99,9 @@ function Welcome() {
           currentChatId: chatId,
           isDraft
         };
-        window.parent.postMessage(payload, '*');
+        window.parent.postMessage(payload, MOODLE_PARENT_ORIGIN);
         // Compatibilidade com integrações antigas do widget maximizado.
-        window.parent.postMessage({ ...payload, type: 'senai_set_active_chat' }, '*');
+        window.parent.postMessage({ ...payload, type: 'senai_set_active_chat' }, MOODLE_PARENT_ORIGIN);
       }
     } catch (error) {
       console.warn('Falha ao salvar estado do chat ativo:', error);
@@ -150,7 +154,14 @@ function Welcome() {
     const handleParentExpandSync = (event) => {
       const type = event?.data?.type;
       if (!type) return;
-      if (!['senai_request_active_chat', 'senai_before_expand', 'senai_expand_clicked'].includes(type)) {
+      if (
+        ![
+          'senai_request_active_chat',
+          'senai_before_expand',
+          'senai_expand_clicked',
+          'MOODLE_CHAT_EXPAND_CLICKED'
+        ].includes(type)
+      ) {
         return;
       }
 
@@ -694,6 +705,21 @@ const normalizeMessageForDisplay = (value) => {
           
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
+          try {
+            localStorage.setItem('activeChatId', currentSessionId);
+          } catch (_error) {
+            // noop
+          }
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(
+                { type: 'senai_active_chat', chatId: currentSessionId },
+                MOODLE_PARENT_ORIGIN
+              );
+            }
+          } catch (_error) {
+            // noop
+          }
           saveActiveChatState(currentSessionId, false);
 
           if (pendingTitleRename && chatTitle) {
@@ -1294,7 +1320,7 @@ Status: Erro 500 - Problema interno do servidor`;
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [location.pathname, location.search]);
 
   const handleNewChat = () => {
     // A nova API salva automaticamente, então só precisamos limpar a interface

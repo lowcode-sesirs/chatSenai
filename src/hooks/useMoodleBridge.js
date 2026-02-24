@@ -1,0 +1,86 @@
+import { useEffect } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+
+const MOODLE_PARENT_ORIGIN = "https://pocsesi-rs.asdnet.com.br";
+
+const buildCurrentRoute = (location) =>
+  `${location.pathname}${location.search}${location.hash}`;
+
+const notifyParentRoute = (route) => {
+  if (typeof window === "undefined") return;
+  if (!window.parent || window.parent === window) return;
+
+  window.parent.postMessage(
+    {
+      type: "CHAT_ROUTE_UPDATE",
+      route,
+    },
+    MOODLE_PARENT_ORIGIN
+  );
+};
+
+const getBestActiveChatId = () => {
+  try {
+    return (
+      localStorage.getItem("pendingExpandChatId") ||
+      localStorage.getItem("activeChatId") ||
+      null
+    );
+  } catch (_error) {
+    return null;
+  }
+};
+
+export const useMoodleBridge = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const currentRoute = buildCurrentRoute(location);
+
+  useEffect(() => {
+    notifyParentRoute(currentRoute);
+  }, [currentRoute]);
+
+  useEffect(() => {
+    const handleMessage = (event) => {
+      const data = event?.data;
+      if (!data || data.type !== "MOODLE_CHAT_EXPAND_CLICKED") return;
+      console.log("MOODLE_CHAT_EXPAND_CLICKED recebido:", data);
+
+      const expandedUrl = data?.expandedUrl;
+      if (!expandedUrl || typeof expandedUrl !== "string") {
+        const chatId = getBestActiveChatId();
+        if (!chatId) return;
+        const fallbackRoute = `/?active_chat_id=${chatId}&chat_id=${chatId}&session_id=${chatId}`;
+        if (fallbackRoute !== currentRoute) {
+          navigate(fallbackRoute, { replace: true });
+        }
+        return;
+      }
+
+      try {
+        const parsed = new URL(expandedUrl, window.location.origin);
+        const params = new URLSearchParams(parsed.search);
+        const chatIdFromUrl =
+          params.get("active_chat_id") || params.get("chat_id") || params.get("session_id");
+        const chatId = chatIdFromUrl || getBestActiveChatId();
+        if (chatId) {
+          params.set("active_chat_id", chatId);
+          params.set("chat_id", chatId);
+          params.set("session_id", chatId);
+        }
+        const search = params.toString();
+        const nextRoute = `${parsed.pathname}${search ? `?${search}` : ""}${parsed.hash}`;
+        if (nextRoute && nextRoute !== currentRoute) {
+          navigate(nextRoute, { replace: true });
+        }
+      } catch (error) {
+        console.warn("Nao foi possivel aplicar expandedUrl recebido do Moodle:", error);
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [currentRoute, navigate]);
+};
+
+export default useMoodleBridge;

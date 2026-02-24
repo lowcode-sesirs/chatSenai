@@ -85,6 +85,55 @@ const getAuthToken = () => {
   return null;
 };
 
+const requestFreshMoodleTokenFromParent = async (timeoutMs = 3000) => {
+  if (typeof window === 'undefined' || !window.parent || window.parent === window) {
+    return null;
+  }
+
+  const extractToken = (data) => {
+    if (!data) return null;
+    if (data.moodle_token) return data.moodle_token;
+    if (data.token) return data.token;
+    if (data.payload?.moodle_token) return data.payload.moodle_token;
+    if (data.payload?.token) return data.payload.token;
+    return null;
+  };
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onMessage);
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const onMessage = (event) => {
+      const data = event?.data;
+      const token = extractToken(data);
+      if (!token) return;
+      try {
+        sessionStorage.setItem('moodle_token', token);
+        localStorage.setItem('moodle_token', token);
+      } catch (_error) {
+        // noop
+      }
+      finish(token);
+    };
+
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    window.addEventListener('message', onMessage);
+
+    try {
+      window.parent.postMessage({ type: 'senai_request_moodle_token' }, '*');
+      window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
+    } catch (_error) {
+      finish(null);
+    }
+  });
+};
+
 const getHeaders = ({ json = true } = {}) => {
   let userId = getMoodleUserId();
   if (userId === 'SEU_VALOR_AQUI' || userId === '{{x-dev-user}}' || userId === 'undefined') {
@@ -121,9 +170,20 @@ const getHeaders = ({ json = true } = {}) => {
 const refreshAccessTokenFromMoodle = async () => {
   try {
     const { token, origin, page } = getMoodleTokenFromURL();
-    if (!token) return false;
-    const result = await validateMoodleSession(token, origin || 'moodle', page || 'chat');
-    return !!(result?.ok && getToken());
+    const fallbackToken = token || sessionStorage.getItem('moodle_token') || localStorage.getItem('moodle_token');
+    if (!fallbackToken) return false;
+
+    let result = await validateMoodleSession(fallbackToken, origin || 'moodle', page || 'chat');
+    if (result?.ok && getToken()) return true;
+
+    if (result?.error === 'invalid_session') {
+      const refreshedToken = await requestFreshMoodleTokenFromParent(3500);
+      if (!refreshedToken) return false;
+      result = await validateMoodleSession(refreshedToken, origin || 'moodle', page || 'chat');
+      return !!(result?.ok && getToken());
+    }
+
+    return false;
   } catch (_error) {
     return false;
   }
