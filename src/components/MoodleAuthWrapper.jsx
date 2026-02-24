@@ -25,21 +25,7 @@ function MoodleAuthWrapper({ children }) {
       try {
         console.log('🔍 Iniciando validação de autenticação...');
         
-        // Verifica se já tem usuário autenticado na sessão
-        const existingUser = getMoodleUser();
-        if (existingUser && (existingUser.userId || existingUser.userName || existingUser.userEmail)) {
-          const isGuest = existingUser.userId === 'guest' || existingUser.fromMoodle === false;
-          if (!isGuest || (window.__MOODLE_USER__ && window.__MOODLE_USER__.userId)) {
-            console.log('✅ Usuário já autenticado encontrado:', existingUser);
-            setAuthState({
-              loading: false,
-              authenticated: true,
-              user: existingUser,
-              error: null
-            });
-            return;
-          }
-        }
+        const fromMoodleRequest = isFromMoodle();
 
         // Verifica o modo de desenvolvimento primeiro
         const isDev = import.meta.env.DEV;
@@ -65,8 +51,24 @@ function MoodleAuthWrapper({ children }) {
           return;
         }
 
+        // Fora do fluxo com moodle_token na URL, reaproveita usuário já autenticado
+        const existingUser = getMoodleUser();
+        if (!fromMoodleRequest && existingUser && (existingUser.userId || existingUser.userName || existingUser.userEmail)) {
+          const isGuest = existingUser.userId === 'guest' || existingUser.fromMoodle === false;
+          if (!isGuest || (window.__MOODLE_USER__ && window.__MOODLE_USER__.userId)) {
+            console.log('✅ Usuário já autenticado encontrado:', existingUser);
+            setAuthState({
+              loading: false,
+              authenticated: true,
+              user: existingUser,
+              error: null
+            });
+            return;
+          }
+        }
+
         // Verifica se veio do Moodle com token (apenas em produção)
-        if (isFromMoodle()) {
+        if (fromMoodleRequest) {
           const { token, origin, page } = getMoodleTokenFromURL();
           
           console.log('🔐 Token Moodle detectado, validando...');
@@ -200,14 +202,6 @@ function MoodleAuthWrapper({ children }) {
     };
 
     window.addEventListener('message', handleMessage);
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
-      }
-    } catch (error) {
-      console.warn('Falha ao solicitar moodle_user via postMessage:', error);
-    }
-
     return () => {
       window.removeEventListener('message', handleMessage);
     };

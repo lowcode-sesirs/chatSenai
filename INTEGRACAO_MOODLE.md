@@ -2,7 +2,7 @@
 
 ## Visão Geral
 
-Este documento descreve como integrar o Chat SENAI com o Moodle usando autenticação via token de sessão.
+Este documento descreve como integrar o Chat SENAI com o Moodle usando autenticacao via `moodle_token` (JWT curto) e exchange no backend Python.
 
 ## Arquitetura
 
@@ -22,12 +22,12 @@ Este documento descreve como integrar o Chat SENAI com o Moodle usando autentica
 ┌───────────────────────────────────────────────────────────────────────────────────┐
 │                           CHAT REACT (senai-chat-dev)                             │
 │  1. Recebe token via URL params                                                   │
-│  2. Envia token para Backend Python (handshake)                                   │
+│  2. Envia token para Backend Python (exchange)                                    │
 │  3. Se válido → carrega chat com user_id                                          │
 │  4. Se inválido → mostra erro de autenticação                                     │
 └───────────────────────────────────────────────────────────────────────────────────┘
             │
-            │ (2) POST /api/moodle/session/handshake
+            │ (2) POST /api/auth/moodle/exchange
             ▼
 ┌───────────────────────────────────────────────────────────────────────────────────┐
 │                        BACKEND PYTHON (Cloud Run)                                 │
@@ -113,7 +113,7 @@ if ($secret !== $expected_secret) {
 
 // Recebe o token
 $input = json_decode(file_get_contents('php://input'), true);
-$token = $input['moodle_session_token'] ?? '';
+$token = $input['moodle_token'] ?? '';
 
 // Valida o token
 $user_id = validate_session_token($token);
@@ -173,12 +173,12 @@ VITE_MOODLE_URL=https://seu-moodle.com
 
 ### 1. Chat React → Backend Python
 
-**POST** `/api/moodle/session/handshake`
+**POST** `/api/auth/moodle/exchange`
 
 Request:
 ```json
 {
-  "moodle_session_token": "TOKEN_DA_SESSAO",
+  "moodle_token": "JWT_CURTO_DO_MOODLE",
   "origin": "moodle",
   "page": "chat"
 }
@@ -187,10 +187,12 @@ Request:
 Response (válido):
 ```json
 {
-  "ok": true,
-  "user_id": 12345,
-  "user_name": "João Silva",
-  "user_email": "joao@email.com"
+  "access_token": "JWT_INTERNO_DA_API",
+  "user": {
+    "id": "12345",
+    "name": "João Silva",
+    "email": "joao@email.com"
+  }
 }
 ```
 
@@ -215,7 +217,7 @@ Content-Type: application/json
 Request:
 ```json
 {
-  "moodle_session_token": "TOKEN_DA_SESSAO"
+  "moodle_token": "JWT_CURTO_DO_MOODLE"
 }
 ```
 
@@ -275,7 +277,7 @@ Para testar a integração completa:
 - [ ] Configurar segredo de integração
 
 ### Backend Python
-- [ ] Criar endpoint /api/moodle/session/handshake
+- [ ] Criar endpoint /api/auth/moodle/exchange
 - [ ] Implementar chamada ao Moodle para validação
 - [ ] Configurar segredo de integração
 - [ ] Tratar erros e timeouts

@@ -54,6 +54,31 @@ function Welcome() {
   // deletados são tratados pelo backend
   const messagesEndRef = useRef(null);
 
+  const postChatRouteUpdateToParent = (chatId) => {
+    if (!chatId) return;
+
+    try {
+      if (!(window.parent && window.parent !== window)) return;
+
+      const url = new URL(window.location.href);
+      url.searchParams.set('session_id', chatId);
+      url.searchParams.delete('active_chat_id');
+      url.searchParams.delete('chat_id');
+      url.searchParams.delete('sid');
+      url.searchParams.delete('active_chat_draft');
+
+      window.parent.postMessage(
+        {
+          type: 'CHAT_ROUTE_UPDATE',
+          route: `${url.pathname}${url.search}${url.hash}`,
+        },
+        '*'
+      );
+    } catch (error) {
+      console.warn('Falha ao enviar CHAT_ROUTE_UPDATE:', error);
+    }
+  };
+
   // Scroll automático para o final quando novas mensagens chegam
   useEffect(() => {
     const hasUserMessages = messages.some((msg) => msg.type === 'user');
@@ -511,6 +536,7 @@ function Welcome() {
           
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
+          postChatRouteUpdateToParent(currentSessionId);
 
           if (pendingTitleRename && chatTitle) {
             try {
@@ -886,6 +912,7 @@ Status: Erro 500 - Problema interno do servidor`;
       const chatId = chat.id || chat.session_id || chat.chat_id;
       setCurrentChatId(chatId);
       setSessionId(chatId);
+      postChatRouteUpdateToParent(chatId);
       
       // Atualiza o título usando a mesma lógica do histórico
       setChatTitle(generateCorrectTitle(chat));
@@ -976,15 +1003,12 @@ Status: Erro 500 - Problema interno do servidor`;
         try {
           const urlParams = new URLSearchParams(window.location.search);
           storedChatId =
-            urlParams.get('active_chat_id') ||
-            urlParams.get('session_id') ||
-            urlParams.get('sid') ||
-            urlParams.get('chat_id');
+            urlParams.get('session_id');
           if (storedChatId) {
             localStorage.setItem('activeChatId', storedChatId);
           }
         } catch (error) {
-          console.warn('Falha ao ler active_chat_id da URL:', error);
+          console.warn('Falha ao ler session_id da URL:', error);
         }
 
       try {
@@ -1075,17 +1099,6 @@ Status: Erro 500 - Problema interno do servidor`;
       console.warn('Falha ao salvar novo activeChatId no localStorage:', error);
     }
 
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage(
-          { type: 'senai_active_chat', chatId: newSessionId },
-          '*'
-        );
-      }
-    } catch (error) {
-      console.warn('Falha ao enviar novo activeChatId via postMessage:', error);
-    }
-    
     // Reseta as mensagens para o estado inicial
     setMessages([
       {
@@ -1129,16 +1142,6 @@ Status: Erro 500 - Problema interno do servidor`;
       console.warn('Falha ao salvar activeChatId no localStorage:', error);
     }
 
-    try {
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage(
-          { type: 'senai_active_chat', chatId: activeChatId },
-          '*'
-        );
-      }
-    } catch (error) {
-      console.warn('Falha ao enviar activeChatId via postMessage:', error);
-    }
   }, [messages, currentChatId, sessionId]);
 
   const handleTitleChange = (e) => {

@@ -11,7 +11,25 @@ const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
   (import.meta.env.DEV ? '/api' : 'https://backend-311313028224.southamerica-east1.run.app/api');
 
-const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '{{x-dev-user}}';
+const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '';
+
+const isPlaceholderUserValue = (value) =>
+  !value ||
+  value === 'SEU_VALOR_AQUI' ||
+  value === '{{x-dev-user}}' ||
+  value === 'undefined' ||
+  value === 'null';
+
+const isEmbeddedIframe = () =>
+  typeof window !== 'undefined' && window.parent && window.parent !== window;
+
+const maskAuthorizationHeader = (headers = {}) => {
+  const safeHeaders = { ...headers };
+  if (safeHeaders.Authorization) {
+    safeHeaders.Authorization = 'Bearer ***';
+  }
+  return safeHeaders;
+};
 
 const logHandshakeSnapshot = (context, url, headers, extra = {}) => {
   try {
@@ -25,14 +43,9 @@ const logHandshakeSnapshot = (context, url, headers, extra = {}) => {
       moodleUser = moodleUserRaw;
     }
 
-    const safeHeaders = { ...(headers || {}) };
-    if (safeHeaders.Authorization) {
-      safeHeaders.Authorization = 'Bearer ***';
-    }
-
     console.log(`🤝 Handshake (${context})`, {
       url,
-      headers: safeHeaders,
+      headers: maskAuthorizationHeader(headers || {}),
       moodleTokenInUrl: !!moodleTokenFromUrl,
       moodleTokenInSession: !!moodleTokenFromSession,
       moodleUser,
@@ -58,7 +71,7 @@ console.log('🔧 Configuração da API:', {
 });
 
 // Função para obter o user_id do Moodle (se disponível)
-const getMoodleUserId = () => {
+export const getMoodleUserId = () => {
   try {
     if (typeof window !== 'undefined') {
       const runtimeUser = window.__MOODLE_USER__;
@@ -81,47 +94,51 @@ const getMoodleUserId = () => {
       }
     }
 
-    const moodleUserFromLocal = localStorage.getItem('moodle_user');
-    if (moodleUserFromLocal) {
-      sessionStorage.setItem('moodle_user', moodleUserFromLocal);
-      const userData = JSON.parse(moodleUserFromLocal);
-      if (userData?.userEmail) {
-        return userData.userEmail;
-      }
-      if (userData?.userId && userData.userId !== 'guest') {
-        return userData.userId;
+    if (!isEmbeddedIframe()) {
+      const moodleUserFromLocal = localStorage.getItem('moodle_user');
+      if (moodleUserFromLocal) {
+        sessionStorage.setItem('moodle_user', moodleUserFromLocal);
+        const userData = JSON.parse(moodleUserFromLocal);
+        if (userData?.userEmail) {
+          return userData.userEmail;
+        }
+        if (userData?.userId && userData.userId !== 'guest') {
+          return userData.userId;
+        }
       }
     }
   } catch (e) {
     console.warn('Erro ao obter user_id do Moodle:', e);
   }
-  return X_DEV_USER;
+  return isPlaceholderUserValue(X_DEV_USER) ? '' : X_DEV_USER;
 };
 
 // Header padrão - usa user_id do Moodle se disponível
-const getHeaders = () => {
+const getHeaders = ({ includeJsonContentType = true } = {}) => {
   let userId = getMoodleUserId();
-  if (userId === 'SEU_VALOR_AQUI' || userId === '{{x-dev-user}}' || userId === 'undefined') {
+  if (isPlaceholderUserValue(userId)) {
     const runtimeUser = typeof window !== 'undefined' ? window.__MOODLE_USER__ : null;
     const runtimeId = runtimeUser?.userId || runtimeUser?.userid || runtimeUser?.user_id || runtimeUser?.id;
     if (runtimeId) {
       userId = runtimeId;
     }
   }
-  const headers = {
-    'Content-Type': 'application/json',
-    'x-dev-user': userId,
-    'moodle_user_id': userId
-  };
+  if (isPlaceholderUserValue(userId) && !isPlaceholderUserValue(X_DEV_USER)) {
+    userId = X_DEV_USER;
+  }
+  const headers = {};
+  if (!isPlaceholderUserValue(userId)) {
+    headers['x-dev-user'] = userId;
+    headers['moodle_user_id'] = userId;
+  }
+  if (includeJsonContentType) {
+    headers['Content-Type'] = 'application/json';
+  }
   const accessToken = getToken();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
-  const logSafeHeaders = { ...headers };
-  if (logSafeHeaders.Authorization) {
-    logSafeHeaders.Authorization = 'Bearer ***';
-  }
-  console.log('?? Headers sendo enviados:', logSafeHeaders);
+  console.log('?? Headers sendo enviados:', maskAuthorizationHeader(headers));
   return headers;
 };
 
@@ -135,12 +152,12 @@ export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
       language: 'pt-BR', // ✅ Força respostas em português
     };
     
-    const headers = getHeaders();
+    const headers = getHeaders({ includeJsonContentType: true });
 
     console.log('🚀 Iniciando chat:', {
       url,
       payload,
-      headers
+      headers: maskAuthorizationHeader(headers)
     });
     logHandshakeSnapshot('before /chat', url, headers, { payload });
     
@@ -183,7 +200,7 @@ export const sendChatMessage = async (sessionId, message) => {
   try {
     const response = await fetch(`${API_BASE_URL}/chat/${sessionId}/message`, {
       method: 'POST',
-      headers: getHeaders(),
+      headers: getHeaders({ includeJsonContentType: true }),
       body: JSON.stringify({
         message,
         language: 'pt-BR', // ✅ Força respostas em português
@@ -221,7 +238,7 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
     
     const response = await fetch(url, {
       method: 'GET',
-      headers: getHeaders(),
+      headers: getHeaders({ includeJsonContentType: false }),
     });
 
     console.log('📡 Resposta do stream:', {
@@ -362,7 +379,7 @@ export const getChatHistory = async () => {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const url = `${API_BASE_URL}/chat/history`;
-    const headers = getHeaders();
+    const headers = getHeaders({ includeJsonContentType: false });
     console.log('📡 Buscando histórico de conversas...');
     logHandshakeSnapshot('before /chat/history', url, headers);
     
@@ -413,8 +430,12 @@ export const getChatHistory = async () => {
 export const loadChat = async (sessionId) => {
   try {
     const url = `${API_BASE_URL}/chat/history/${sessionId}`;
-    const headers = getHeaders();
-    console.log('📡 Carregando conversa...', { url, method: 'GET', headers });
+    const headers = getHeaders({ includeJsonContentType: false });
+    console.log('Carregando conversa (request)...', {
+      url,
+      method: 'GET',
+      headers: maskAuthorizationHeader(headers)
+    });
     
     const response = await fetch(url, {
       method: 'GET',
@@ -442,7 +463,7 @@ export const renameChat = async (sessionId, title) => {
   try {
     const response = await fetch(`${API_BASE_URL}/chat/${sessionId}/title`, {
       method: 'PATCH',
-      headers: getHeaders(),
+      headers: getHeaders({ includeJsonContentType: true }),
       body: JSON.stringify({
         title,
       }),
@@ -474,7 +495,7 @@ export const sendFeedback = async (sessionId, messageId, rating, comment = '') =
     
     const response = await fetch(`${API_BASE_URL}/chat/feedback`, {
       method: 'POST',
-      headers: getHeaders(),
+      headers: getHeaders({ includeJsonContentType: true }),
       body: JSON.stringify(payload),
     });
 
@@ -517,7 +538,7 @@ export const deleteChat = async (sessionId) => {
       
       const response = await fetch(endpoint, {
         method: 'DELETE',
-        headers: getHeaders(),
+        headers: getHeaders({ includeJsonContentType: false }),
       });
 
       if (response.ok) {
