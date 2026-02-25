@@ -19,7 +19,7 @@ function Welcome() {
   const [message, setMessage] = useState('');
   const [moodleUser, setMoodleUser] = useState(() => getMoodleUser());
   const now = new Date();
-  const [chatTitle, setChatTitle] = useState(`Chat ${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`);
+  const [chatTitle, setChatTitle] = useState('Chat sem título');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingTitleRename, setPendingTitleRename] = useState(false);
@@ -537,6 +537,14 @@ function Welcome() {
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
           postChatRouteUpdateToParent(currentSessionId);
+
+          const backendTitle =
+            chatResponse.title ||
+            chatResponse.chat_title ||
+            chatResponse.session_title;
+          if (!pendingTitleRename && backendTitle) {
+            setChatTitle(backendTitle);
+          }
 
           if (pendingTitleRename && chatTitle) {
             try {
@@ -1115,9 +1123,8 @@ Status: Erro 500 - Problema interno do servidor`;
     setFeedbackGiven({});
     setCopiedMessages({});
     
-    // Cria novo título com data atual
-    const now = new Date();
-    setChatTitle(`Chat ${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1).toString().padStart(2, '0')}/${now.getFullYear()}`);
+    // Novo chat começa sem título até o backend retornar o título após a primeira mensagem
+    setChatTitle('Chat sem título');
     
     // Força reload do histórico na próxima abertura
     setHistoryLoaded(false);
@@ -1543,6 +1550,8 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Dislike */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, false)}
+                                  title="Não gostei"
+                                  aria-label="Não gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
                                   className={`transition-all ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
@@ -1572,6 +1581,8 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Like */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, true)}
+                                  title="Gostei"
+                                  aria-label="Gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
                                   className={`transition-all ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 

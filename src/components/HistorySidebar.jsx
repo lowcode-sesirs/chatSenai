@@ -30,7 +30,7 @@ const generateDisplayTitle = (chat) => {
   }
   
   // Sempre gera título no formato "Chat DD/MM/AAAA" baseado na data
-  const chatDate = chat.timestamp || chat.created_at || chat.updated_at || chat.date;
+  const chatDate = chat.timestamp || chat.updated_at || chat.created_at || chat.date;
   
   if (chatDate) {
     const date = new Date(chatDate);
@@ -134,21 +134,22 @@ function HistorySidebar({ isOpen, onClose, history, onSelectChat, isLoading, onR
                           </h4>
                           <div className="flex items-center gap-2 ml-2">
                             <span className="text-xs text-gray-400 whitespace-nowrap">
-                              {formatTime(chat.timestamp || chat.created_at || chat.date)}
+                              {formatTime(chat.timestamp || chat.updated_at || chat.created_at || chat.date)}
                             </span>
-                            <button 
-                              className={`transition-opacity flex-shrink-0 ${canDeleteChat ? 'hover:opacity-70' : 'opacity-40 cursor-not-allowed'}`}
-                              disabled={!canDeleteChat}
-                              title={canDeleteChat ? 'Excluir conversa' : 'Apenas administradores podem excluir'}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (canDeleteChat && onDeleteChat) {
-                                  onDeleteChat(chat);
-                                }
-                              }}
-                            >
-                              <Trash2 size={14} className="text-[#FF0000]" />
-                            </button>
+                            {canDeleteChat && (
+                              <button 
+                                className="transition-opacity flex-shrink-0 hover:opacity-70"
+                                title="Excluir conversa"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (onDeleteChat) {
+                                    onDeleteChat(chat);
+                                  }
+                                }}
+                              >
+                                <Trash2 size={14} className="text-[#FF0000]" />
+                              </button>
+                            )}
                           </div>
                         </div>
                         <p className="text-xs text-gray-500 line-clamp-2 leading-relaxed">
@@ -188,7 +189,7 @@ function groupByDate(history) {
   const groups = {};
 
   history.forEach((chat) => {
-    const chatDate = new Date(chat.timestamp || chat.created_at || chat.date);
+    const chatDate = new Date(chat.timestamp || chat.updated_at || chat.created_at || chat.date);
     const chatDay = new Date(chatDate.getFullYear(), chatDate.getMonth(), chatDate.getDate());
     
     const diffTime = today - chatDay;
