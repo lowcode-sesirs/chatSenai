@@ -1,9 +1,10 @@
-﻿import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Pencil, Square } from 'lucide-react';
 import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, deleteChat } from '../services/chatService';
 import { getMoodleUser } from '../services/moodleAuthService';
 import AIMessageContent from '../components/AIMessageContent';
 import HistorySidebar from '../components/HistorySidebar';
+import useMoodleBridge from '../hooks/useMoodleBridge';
 import historicoIcon from '../assets/historico.png';
 import questionIcon from '../assets/question.png';
 import fiergsSenaiLogo from '../assets/senai.png';
@@ -51,8 +52,29 @@ function Welcome() {
   ]);
   const [feedbackGiven, setFeedbackGiven] = useState({}); // Rastreia feedback dado por messageId
   const [copiedMessages, setCopiedMessages] = useState({}); // Rastreia mensagens copiadas
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [isExpandedOverlayOpen, setIsExpandedOverlayOpen] = useState(false);
+  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
   // deletados são tratados pelo backend
   const messagesEndRef = useRef(null);
+  const mainScrollRef = useRef(null);
+
+  const moodleOrigin = (() => {
+    const envOrigin = import.meta.env.VITE_MOODLE_ORIGIN;
+    if (envOrigin) return envOrigin;
+    try {
+      return document.referrer ? new URL(document.referrer).origin : '';
+    } catch (_error) {
+      return '';
+    }
+  })();
+
+  useMoodleBridge({
+    moodleOrigin,
+    onChatExpanded: useCallback(() => {
+      setIsExpandedOverlayOpen(true);
+    }, [])
+  });
 
   const postChatRouteUpdateToParent = (chatId) => {
     if (!chatId) return;
@@ -102,12 +124,34 @@ function Welcome() {
     }
   };
 
-  // Scroll automático para o final quando novas mensagens chegam
+  const updateScrollToBottomButton = () => {
+    const container = mainScrollRef.current;
+    if (!container) return;
+    const threshold = 24;
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    setShowScrollToBottom(distanceToBottom > threshold);
+  };
+
+  // Atualiza visibilidade do botão de âncora ao mudar as mensagens
   useEffect(() => {
     const hasUserMessages = messages.some((msg) => msg.type === 'user');
-    if (!hasUserMessages) return;
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!hasUserMessages) {
+      setShowScrollToBottom(false);
+      return;
+    }
+    const rafId = requestAnimationFrame(() => {
+      updateScrollToBottomButton();
+    });
+    return () => cancelAnimationFrame(rafId);
   }, [messages]);
+
+  const handleScrollMain = () => {
+    updateScrollToBottomButton();
+  };
+
+  const handleScrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
 
   useEffect(() => {
     const updateMoodleUser = () => {
@@ -1147,6 +1191,45 @@ Status: Erro 500 - Problema interno do servidor`;
     console.log('âœ… Nova conversa iniciada!');
   };
 
+  const handleResumeExpandedChatHere = async () => {
+    const activeId = currentChatId || sessionId;
+    if (!activeId) {
+      window.alert('Nenhuma conversa ativa para recarregar.');
+      return;
+    }
+
+    setIsRefreshingHistory(true);
+    try {
+      const existingChat = Array.isArray(chatHistory)
+        ? chatHistory.find((chat) => (chat.id || chat.session_id || chat.chat_id) === activeId)
+        : null;
+
+      await handleLoadChat(
+        existingChat || {
+          id: activeId,
+          session_id: activeId,
+          title: chatTitle,
+          updated_at: new Date().toISOString(),
+        }
+      );
+
+      setIsExpandedOverlayOpen(false);
+      requestAnimationFrame(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
+    } catch (error) {
+      console.error('Erro ao retomar conversa expandida:', error);
+      window.alert('N?o foi poss?vel recarregar a conversa. Tente novamente.');
+    } finally {
+      setIsRefreshingHistory(false);
+    }
+  };
+
+  const handleStartNewChatFromExpandedOverlay = () => {
+    setIsExpandedOverlayOpen(false);
+    handleNewChat();
+  };
+
   const handleTitleEdit = () => {
     setIsEditingTitle(true);
   };
@@ -1294,7 +1377,17 @@ Status: Erro 500 - Problema interno do servidor`;
                   style={{ width: '140px' }}
                 />
               ) : (
-                <span className="text-xs font-medium">{chatTitle}</span>
+                <span
+                  className="text-xs font-medium"
+                  style={{
+                    maxWidth: '150px',
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                >
+                  {chatTitle}
+                </span>
               )}
             </button>
           </div>
@@ -1371,7 +1464,11 @@ Status: Erro 500 - Problema interno do servidor`;
       </header>
 
       {/* Main Content - Scrollable */}
-      <main className="flex-1 min-h-0 overflow-y-auto">
+      <main
+        ref={mainScrollRef}
+        onScroll={handleScrollMain}
+        className="flex-1 min-h-0 overflow-y-auto"
+      >
         <div className="max-w-[900px] mx-auto px-3 md:px-6 w-full py-6 md:py-12">
           {/* Logo and Welcome */}
           <div className="text-center mb-8 md:mb-16">
@@ -1687,6 +1784,72 @@ Status: Erro 500 - Problema interno do servidor`;
           )}
         </div>
       </main>
+
+      {showScrollToBottom && messages.length > 0 && (
+        <button
+          type="button"
+          onClick={handleScrollToBottom}
+          className="fixed left-1/2 -translate-x-1/2 bottom-40 md:bottom-44 z-40 rounded-full w-8 h-8 flex items-center justify-center border border-white/30 text-white shadow-lg hover:opacity-90 transition-opacity"
+          title="Ir para o fim da conversa"
+          aria-label="Ir para o fim da conversa"
+          style={{
+            backgroundColor: 'rgba(107, 114, 128, 0.28)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)'
+          }}
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <path
+              d="M12 5V16"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            />
+            <path
+              d="M7 12L12 17L17 12"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
+
+      {isExpandedOverlayOpen && (
+        <div className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-md rounded-xl bg-white border border-gray-200 shadow-2xl p-5">
+            <p className="text-sm text-gray-800 mb-4">
+              Esta conversa foi aberta em uma nova aba. Para continuar aqui, atualize o conteúdo.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleResumeExpandedChatHere}
+                disabled={isRefreshingHistory}
+                className="w-full rounded-lg bg-[#262626] text-white py-2.5 px-4 text-sm font-medium hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isRefreshingHistory ? 'Atualizando...' : 'Retomar conversa aqui'}
+              </button>
+              <button
+                type="button"
+                onClick={handleStartNewChatFromExpandedOverlay}
+                disabled={isRefreshingHistory}
+                className="w-full rounded-lg border border-gray-300 bg-white text-gray-800 py-2.5 px-4 text-sm font-medium hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Iniciar nova conversa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Input Area - Fixed at bottom */}
       <div className="flex-shrink-0 bg-white border-t border-gray-200 pb-4 md:pb-8">

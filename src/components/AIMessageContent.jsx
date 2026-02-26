@@ -6,6 +6,38 @@
  */
 function AIMessageContent({ message }) {
   const [imageErrors, setImageErrors] = useState({});
+  const [lightboxImage, setLightboxImage] = useState(null);
+
+  const isEmbeddedIframe = () =>
+    typeof window !== 'undefined' && window.parent && window.parent !== window;
+
+  const handleOpenImage = (img) => {
+    if (!img?.url) return;
+
+    if (isEmbeddedIframe()) {
+      try {
+        window.parent.postMessage(
+          {
+            type: 'CHAT_IMAGE_LIGHTBOX_OPEN',
+            image: {
+              url: img.url,
+              alt: img.alt || 'Imagem do conteúdo',
+              title: img.alt || 'Imagem do conteúdo',
+            }
+          },
+          '*'
+        );
+        return;
+      } catch (error) {
+        console.warn('Falha ao solicitar lightbox de imagem ao parent:', error);
+      }
+    }
+
+    setLightboxImage({
+      url: img.url,
+      alt: img.alt || 'Imagem do conteúdo'
+    });
+  };
 
 
   const renderTextWithVideoLinks = (text) => {
@@ -43,14 +75,21 @@ function AIMessageContent({ message }) {
           {images.map((img, index) => (
             <div key={index} className="rounded-lg overflow-hidden border border-gray-200 w-full md:w-[200px]">
               {!imageErrors[index] ? (
-                <a href={img.url} target="_blank" rel="noopener noreferrer" className="block">
+                <button
+                  type="button"
+                  className="block w-full text-left"
+                  onClick={() => handleOpenImage(img)}
+                  title="Abrir imagem"
+                  aria-label="Abrir imagem"
+                  style={{ background: 'none', border: 'none', padding: 0 }}
+                >
                   <img
                     src={img.url}
                     alt={img.alt || 'Imagem do conteúdo'}
                     className="w-full h-auto cursor-pointer"
                     onError={() => setImageErrors((prev) => ({ ...prev, [index]: true }))}
                   />
-                </a>
+                </button>
               ) : (
                 <div className="bg-gray-100 p-4 text-center text-gray-500 text-sm">
                   Imagem não disponível
@@ -164,6 +203,39 @@ function AIMessageContent({ message }) {
       {message.media && renderImages(message.media)}
       {message.references && renderReferences(message.references)}
       {message.suggested_topics && renderSuggestedTopics(message.suggested_topics)}
+
+      {lightboxImage && (
+        <div
+          className="fixed inset-0 z-[1000] bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setLightboxImage(null)}
+        >
+          <div
+            className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-3 border-b border-gray-200">
+              <span className="text-sm font-medium text-gray-700 truncate">
+                {lightboxImage.alt || 'Imagem'}
+              </span>
+              <button
+                type="button"
+                onClick={() => setLightboxImage(null)}
+                className="text-sm px-3 py-1 rounded hover:bg-gray-100"
+                title="Fechar"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="p-3 max-h-[calc(90vh-56px)] overflow-auto flex items-center justify-center">
+              <img
+                src={lightboxImage.url}
+                alt={lightboxImage.alt || 'Imagem'}
+                className="max-w-full h-auto"
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
