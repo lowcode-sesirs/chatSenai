@@ -79,6 +79,29 @@ function Welcome() {
     }
   };
 
+  const postChatRouteClearToParent = () => {
+    try {
+      if (!(window.parent && window.parent !== window)) return;
+
+      const url = new URL(window.location.href);
+      url.searchParams.delete('session_id');
+      url.searchParams.delete('active_chat_id');
+      url.searchParams.delete('chat_id');
+      url.searchParams.delete('sid');
+      url.searchParams.delete('active_chat_draft');
+
+      window.parent.postMessage(
+        {
+          type: 'CHAT_ROUTE_UPDATE',
+          route: `${url.pathname}${url.search}${url.hash}`,
+        },
+        '*'
+      );
+    } catch (error) {
+      console.warn('Falha ao enviar CHAT_ROUTE_UPDATE (clear):', error);
+    }
+  };
+
   // Scroll automático para o final quando novas mensagens chegam
   useEffect(() => {
     const hasUserMessages = messages.some((msg) => msg.type === 'user');
@@ -322,24 +345,13 @@ function Welcome() {
 
   // Função para gerar título correto (igual ao histórico)
   const generateCorrectTitle = (chat) => {
-    // Se tem título editado manualmente (não é pergunta nem formato de data padrão), usa ele
-    if (chat.title && 
-        !chat.title.startsWith('Olá') && 
-        !chat.title.startsWith('Como posso') && 
-        !chat.title.startsWith('Qual') && 
-        !chat.title.endsWith('?')) {
-      
-      // Se começa com "Chat ", verifica se é o formato de data padrão
-      if (chat.title.startsWith('Chat ')) {
-        const dateRegex = /^Chat \d{2}\/\d{2}\/\d{4}$/;
-        if (!dateRegex.test(chat.title)) {
-          // Não é formato de data padrão, é título editado
-          return chat.title;
-        }
-        // Ã‰ formato de data padrão, continua para gerar pela data real
-      } else {
-        // Não começa com "Chat ", é título editado
-        return chat.title;
+    const title = typeof chat.title === 'string' ? chat.title.trim() : '';
+
+    // Se o backend já retornou um título real, preserva (incluindo perguntas).
+    if (title && title !== 'Chat sem título') {
+      const dateRegex = /^Chat \d{2}\/\d{2}\/\d{4}$/;
+      if (!dateRegex.test(title)) {
+        return title;
       }
     }
     
@@ -792,9 +804,9 @@ Status: Erro 500 - Problema interno do servidor`;
         '',
         'Estou aqui para facilitar sua jornada.',
         '',
-        'Você pode me perguntar sobre qualquer conteúdo do seu curso: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é te dar as melhores respostas sobre o conteúdo do seu curso.',
+        'Você pode me perguntar sobre qualquer conteúdo do seu curso: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é oferecer as melhores respostas com base no material do seu curso.',
         '',
-        'Estou limitada nosso conteúdo interno. Não posso responder outras dúvidas, como por exemplo, fazer um bolo.',
+        'Estou limitada ao nosso conteúdo interno e não posso responder outras dúvidas, como, por exemplo, ensinar a fazer um bolo.',
         '',
         'Pode contar comigo para tornar o aprendizado mais leve, claro e acessível.',
         '',
@@ -1008,10 +1020,12 @@ Status: Erro 500 - Problema interno do servidor`;
     let ignore = false;
     const restoreActiveChat = async () => {
       let storedChatId = null;
+      let hasSessionIdParam = false;
         try {
           const urlParams = new URLSearchParams(window.location.search);
-          storedChatId =
-            urlParams.get('session_id');
+          const sessionIdFromUrl = urlParams.get('session_id');
+          hasSessionIdParam = !!sessionIdFromUrl;
+          storedChatId = sessionIdFromUrl;
           if (storedChatId) {
             localStorage.setItem('activeChatId', storedChatId);
           }
@@ -1020,7 +1034,7 @@ Status: Erro 500 - Problema interno do servidor`;
         }
 
       try {
-        if (!storedChatId) {
+        if (!storedChatId && hasSessionIdParam) {
           storedChatId = localStorage.getItem('activeChatId');
         }
       } catch (error) {
@@ -1099,6 +1113,7 @@ Status: Erro 500 - Problema interno do servidor`;
     const newSessionId = generateUUID();
     setSessionId(newSessionId);
     setCurrentChatId(null);
+    postChatRouteClearToParent();
 
     // Atualiza imediatamente o chat ativo para o widget maximizado abrir limpo
     try {
@@ -1530,9 +1545,9 @@ Status: Erro 500 - Problema interno do servidor`;
                             <p className="font-bold mb-4">{msg.text}</p>
                             <p className="mb-4">Estou aqui para facilitar sua jornada.</p>
                             <p className="mb-4">
-                              Você pode me perguntar sobre qualquer <span style={{ color: '#E84910', fontWeight: 600 }}>conteúdo do seu curso</span>: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é te dar as melhores respostas sobre <span style={{ color: '#E84910', fontWeight: 600 }}>o conteúdo do seu curso</span>.
+                              Você pode me perguntar sobre qualquer <span style={{ color: '#E84910', fontWeight: 600 }}>conteúdo do seu curso</span>: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é oferecer as melhores respostas com <span style={{ color: '#E84910', fontWeight: 600 }}>base no material do seu curso</span>.
                             </p>
-                            <p className="mb-4">Estou limitada nosso conteúdo interno. Não posso responder outras dúvidas, como por exemplo, fazer um bolo.</p>
+                            <p className="mb-4">Estou limitada ao nosso conteúdo interno e não posso responder a outras dúvidas, como, por exemplo, ensinar a fazer um bolo.</p>
                             <p className="mb-4">Pode contar comigo para tornar o aprendizado mais leve, claro e acessível. 😉</p>
                             <p>Vamos juntos!</p>
                           </div>
