@@ -233,6 +233,21 @@ function Welcome() {
 
 
   // Função para carregar histórico (lazy loading)
+  const getHistoryChatId = (chat) => chat?.id || chat?.session_id || chat?.chat_id || null;
+
+  const isPlaceholderHistoryTitle = (value) => {
+    if (!value || typeof value !== 'string') return true;
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    if (!normalized) return true;
+    if (normalized === 'chat sem titulo') return true;
+    if (/^chat\s+\d{2}\/\d{2}\/\d{4}$/i.test(value.trim())) return true;
+    return false;
+  };
+
   const loadHistory = async (forceReload = false) => {
     // Se já carregou e não é reload forçado, não recarrega
     if (historyLoaded && !forceReload) return;
@@ -259,10 +274,60 @@ function Welcome() {
           const dateB = new Date(b.updated_at || b.created_at || 0);
           return dateB - dateA;
         });
-        
-        setChatHistory(sortedHistory);
+
+        // Alguns registros chegam com t?tulo placeholder (ex.: Chat DD/MM/AAAA).
+        // Para esses casos, consulta o endpoint de conversa completa e usa o t?tulo real.
+        const placeholderChats = sortedHistory
+          .filter((chat) => {
+            const currentTitle =
+              chat?.chat_title || chat?.session_title || chat?.title || chat?.name || '';
+            return isPlaceholderHistoryTitle(currentTitle) && !!getHistoryChatId(chat);
+          })
+          .slice(0, 12);
+
+        let enrichedHistory = sortedHistory;
+        if (placeholderChats.length > 0) {
+          const resolvedTitlesById = {};
+
+          await Promise.all(
+            placeholderChats.map(async (chat) => {
+              const chatId = getHistoryChatId(chat);
+              if (!chatId) return;
+
+              try {
+                const chatData = await loadChat(chatId);
+                const endpointTitle =
+                  chatData?.chat_title ||
+                  chatData?.session_title ||
+                  chatData?.title ||
+                  chatData?.name ||
+                  '';
+
+                if (!isPlaceholderHistoryTitle(endpointTitle)) {
+                  resolvedTitlesById[chatId] = endpointTitle.trim();
+                }
+              } catch (_error) {
+                // Mant?m o item original quando o endpoint n?o retorna t?tulo v?lido.
+              }
+            })
+          );
+
+          enrichedHistory = sortedHistory.map((chat) => {
+            const chatId = getHistoryChatId(chat);
+            const resolvedTitle = chatId ? resolvedTitlesById[chatId] : null;
+            if (!resolvedTitle) return chat;
+            return {
+              ...chat,
+              title: resolvedTitle,
+              chat_title: resolvedTitle,
+              session_title: resolvedTitle,
+            };
+          });
+        }
+
+        setChatHistory(enrichedHistory);
         setHistoryLoaded(true);
-        console.log('âœ… Histórico carregado e ordenado com sucesso!');
+        console.log('? Hist?rico carregado e ordenado com sucesso!');
       } else {
         console.log('âš ï¸ Histórico retornado não é um array, usando array vazio');
         setChatHistory([]);
@@ -389,34 +454,29 @@ function Welcome() {
 
   // Função para gerar título correto (igual ao histórico)
   const generateCorrectTitle = (chat) => {
-    const title = typeof chat.title === 'string' ? chat.title.trim() : '';
+    const titleCandidates = [
+      chat?.chat_title,
+      chat?.session_title,
+      chat?.title,
+      chat?.name,
+    ];
 
-    // Se o backend já retornou um título real, preserva (incluindo perguntas).
-    if (title && title !== 'Chat sem título') {
-      const dateRegex = /^Chat \d{2}\/\d{2}\/\d{4}$/;
-      if (!dateRegex.test(title)) {
-        return title;
+    const normalizedTitle = titleCandidates
+      .find((value) => typeof value === 'string' && value.trim())
+      ?.trim();
+
+    if (normalizedTitle) {
+      const titleKey = normalizedTitle
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+      if (titleKey !== 'chat sem titulo' && !/^chat \d{2}\/\d{2}\/\d{4}$/i.test(normalizedTitle)) {
+        return normalizedTitle;
       }
     }
-    
-    // Gera título baseado na data
-    const chatDate = chat.timestamp || chat.created_at || chat.updated_at || chat.date;
-    if (chatDate) {
-      const date = new Date(chatDate);
-      if (!isNaN(date.getTime())) {
-        const day = date.getDate().toString().padStart(2, '0');
-        const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        const year = date.getFullYear();
-        return `Chat ${day}/${month}/${year}`;
-      }
-    }
-    
-    // Fallback: data atual
-  const now = new Date();
-  const day = now.getDate().toString().padStart(2, '0');
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const year = now.getFullYear();
-  return `Chat ${day}/${month}/${year}`;
+
+    return 'Chat sem t?tulo';
   };
 
   const extractMessagesFromChatData = (chatData, fallbackChat) => {
@@ -576,6 +636,7 @@ function Welcome() {
         let currentSessionId = sessionId;
         let aiResponse = null;
         let streamUrl = null;
+        let responseTitle = null;
         
         // Se é a primeira mensagem (apenas mensagem de boas-vindas), inicia nova conversa
         if (messages.length === 1) {
@@ -598,6 +659,7 @@ function Welcome() {
             chatResponse.title ||
             chatResponse.chat_title ||
             chatResponse.session_title;
+          responseTitle = backendTitle || null;
           if (!pendingTitleRename && backendTitle) {
             setChatTitle(backendTitle);
           }
@@ -623,6 +685,11 @@ function Welcome() {
           console.log('ðŸ’¬ Enviando mensagem na conversa:', currentSessionId);
           const messageResponse = await sendChatMessage(currentSessionId, userMessageText);
           aiResponse = messageResponse.response || messageResponse.message || messageResponse.answer || messageResponse.text;
+          responseTitle =
+            messageResponse.title ||
+            messageResponse.chat_title ||
+            messageResponse.session_title ||
+            null;
           
           // Pega o stream_url se disponível
           if (messageResponse.stream_url) {
@@ -631,6 +698,16 @@ function Welcome() {
           }
           
           console.log('ðŸ“ Resposta da IA:', aiResponse);
+        }
+
+        if (responseTitle) {
+          setChatHistory(prevHistory =>
+            prevHistory.map(chat => {
+              const chatId = chat.id || chat.session_id || chat.chat_id;
+              if (chatId !== currentSessionId) return chat;
+              return { ...chat, title: responseTitle };
+            })
+          );
         }
         
         // Se temos resposta direta, usa ela
@@ -1887,8 +1964,8 @@ Status: Erro 500 - Problema interno do servidor`;
                       }
                     }}
                     placeholder="No que posso te ajudar hoje?"
-                    className="w-full pr-12 md:pr-14 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base resize-none"
-                    style={{ height: '80px', borderColor: '#262626', padding: '12px' }}
+                    className="w-full rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base resize-none"
+                    style={{ height: '80px', borderColor: '#262626', padding: '12px 56px 12px 12px' }}
                     rows={1}
                   />
                   <button

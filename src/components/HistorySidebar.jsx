@@ -4,54 +4,41 @@ import { X, Trash2, RefreshCw } from 'lucide-react';
  * Gera título no formato "Chat DD/MM/AAAA" baseado na data da conversa
  */
 const generateDisplayTitle = (chat) => {
-  console.log('🔍 Gerando título para chat:', chat);
-  
-  // Se tem título editado manualmente (não é pergunta nem formato de data padrão), usa ele
-  if (chat.title && 
-      !chat.title.startsWith('Olá') && 
-      !chat.title.startsWith('Como posso') && 
-      !chat.title.startsWith('Qual') && 
-      !chat.title.endsWith('?')) {
-    
-    // Se começa com "Chat ", verifica se é o formato de data padrão
-    if (chat.title.startsWith('Chat ')) {
-      const dateRegex = /^Chat \d{2}\/\d{2}\/\d{4}$/;
-      if (!dateRegex.test(chat.title)) {
-        // Não é formato de data padrão, é título editado
-        console.log('📝 Usando título editado (Chat personalizado):', chat.title);
-        return chat.title;
-      }
-      // É formato de data padrão, continua para gerar pela data real
-    } else {
-      // Não começa com "Chat ", é título editado
-      console.log('📝 Usando título editado manualmente:', chat.title);
-      return chat.title;
-    }
+  const titleCandidates = [
+    chat?.chat_title,
+    chat?.session_title,
+    chat?.title,
+    chat?.name,
+  ];
+
+  const cleanTitle = (value) => {
+    if (typeof value !== 'string') return '';
+    return value.trim();
+  };
+
+  const isPlaceholderTitle = (value) => {
+    if (!value) return true;
+
+    const normalized = value
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+    if (normalized === 'chat sem titulo') return true;
+    if (/^chat\s+\d{2}\/\d{2}\/\d{4}$/i.test(value.trim())) return true;
+
+    return false;
+  };
+
+  const preferredTitle = titleCandidates
+    .map(cleanTitle)
+    .find((value) => value && !isPlaceholderTitle(value));
+
+  if (preferredTitle) {
+    return preferredTitle;
   }
-  
-  // Sempre gera título no formato "Chat DD/MM/AAAA" baseado na data
-  const chatDate = chat.timestamp || chat.updated_at || chat.created_at || chat.date;
-  
-  if (chatDate) {
-    const date = new Date(chatDate);
-    if (!isNaN(date.getTime())) {
-      const day = date.getDate().toString().padStart(2, '0');
-      const month = (date.getMonth() + 1).toString().padStart(2, '0');
-      const year = date.getFullYear();
-      const formattedTitle = `Chat ${day}/${month}/${year}`;
-      console.log('📅 Título gerado pela data:', formattedTitle);
-      return formattedTitle;
-    }
-  }
-  
-  // Último fallback: usa data atual
-  const now = new Date();
-  const day = now.getDate().toString().padStart(2, '0');
-  const month = (now.getMonth() + 1).toString().padStart(2, '0');
-  const year = now.getFullYear();
-  const fallbackTitle = `Chat ${day}/${month}/${year}`;
-  console.log('🔄 Usando data atual como fallback:', fallbackTitle);
-  return fallbackTitle;
+
+  return 'Chat sem titulo';
 };
 
 /**
@@ -272,3 +259,5 @@ function formatTime(timestamp) {
 }
 
 export default HistorySidebar;
+
+
