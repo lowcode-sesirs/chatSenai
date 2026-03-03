@@ -153,6 +153,12 @@ function Welcome() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   };
 
+  const scrollToBottomSoon = () => {
+    requestAnimationFrame(() => {
+      handleScrollToBottom();
+    });
+  };
+
   useEffect(() => {
     const updateMoodleUser = () => {
       setMoodleUser(getMoodleUser());
@@ -614,6 +620,7 @@ function Welcome() {
       };
       setMessages(prev => [...prev, userMessage]);
       setMessage('');
+      scrollToBottomSoon();
       
       setIsLoading(true);
       
@@ -631,6 +638,7 @@ function Welcome() {
         isStreaming: true
       };
       setMessages(prev => [...prev, initialAiMessage]);
+      scrollToBottomSoon();
       
       try {
         let currentSessionId = sessionId;
@@ -720,6 +728,7 @@ function Welcome() {
                 : msg
             )
           );
+          scrollToBottomSoon();
           setIsLoading(false);
           
           // âœ… Atualiza o histórico
@@ -766,6 +775,7 @@ function Welcome() {
                     : msg
                 )
               );
+              scrollToBottomSoon();
             },
             // onComplete - finaliza o streaming
             (finalText) => {
@@ -776,6 +786,7 @@ function Welcome() {
                     : msg
                 )
               );
+              scrollToBottomSoon();
               setIsLoading(false);
               
               // âœ… Atualiza o histórico
