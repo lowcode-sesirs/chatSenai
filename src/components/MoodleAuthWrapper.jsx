@@ -5,7 +5,8 @@ import {
   isFromMoodle,
   decodeMoodleToken,
   storeMoodleUser,
-  getMoodleUser
+  getMoodleUser,
+  refreshAccessTokenFromMoodle
 } from '../services/moodleAuthService';
 
 /**
@@ -78,10 +79,27 @@ function MoodleAuthWrapper({ children }) {
             setTimeout(() => reject(new Error('Timeout na validação')), 10000)
           );
           
-          const result = await Promise.race([
+          let result = await Promise.race([
             validateMoodleSession(token, origin, page),
             timeoutPromise
           ]);
+
+          if (!result?.ok) {
+            const recovered = await refreshAccessTokenFromMoodle({
+              allowParentTokenRequest: true,
+              reloadOnFailure: true,
+            });
+
+            if (recovered) {
+              let tokenForRetry = token;
+              try {
+                tokenForRetry = sessionStorage.getItem('moodle_token') || token;
+              } catch (_error) {
+                // noop
+              }
+              result = await validateMoodleSession(tokenForRetry, origin, page);
+            }
+          }
           
           if (result.ok) {
             const userData = {
@@ -107,7 +125,10 @@ function MoodleAuthWrapper({ children }) {
             window.history.replaceState({}, '', url);
           } else {
             const decodedUser = decodeMoodleToken(token);
-            if (decodedUser && decodedUser.userId) {
+            const allowDecodedFallback =
+              !(window.parent && window.parent !== window);
+
+            if (allowDecodedFallback && decodedUser && decodedUser.userId) {
               console.warn('⚠️ Validação falhou, usando dados do token localmente.');
               storeMoodleUser(decodedUser);
               setAuthState({
@@ -122,7 +143,7 @@ function MoodleAuthWrapper({ children }) {
                 loading: false,
                 authenticated: false,
                 user: null,
-                error: result.error || 'Sessão inválida'
+                error: 'Sessão do Moodle expirada. Reabra o chat pelo Moodle.'
               });
             }
           }

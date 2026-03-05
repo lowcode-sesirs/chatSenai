@@ -1,4 +1,5 @@
 import { getToken } from './tokenStore';
+import { refreshAccessTokenFromMoodle } from './moodleAuthService';
 
 // Configuração dos endpoints da API
 const RUNTIME_API_BASE_URL =
@@ -142,6 +143,81 @@ const getHeaders = ({ includeJsonContentType = true } = {}) => {
   return headers;
 };
 
+const fetchWithAuthRetry = async (url, options, context = 'api', headersFactory = null) => {
+  let response = await fetch(url, options);
+
+  if (response.status !== 401) {
+    return response;
+  }
+
+  console.warn(`401 detectado em ${context}, renovando token via Moodle exchange...`);
+  const refreshed = await refreshAccessTokenFromMoodle({
+    allowParentTokenRequest: true,
+    reloadOnFailure: true,
+  });
+
+  if (!refreshed) {
+    return response;
+  }
+
+  const retriedOptions = {
+    ...options,
+    headers: typeof headersFactory === 'function' ? headersFactory() : options?.headers,
+  };
+
+  response = await fetch(url, retriedOptions);
+  return response;
+};
+
+const normalizeMediaItems = (payload) => {
+  if (!payload) return [];
+
+  const candidates = Array.isArray(payload) ? payload : [payload];
+  const media = [];
+
+  const pushImage = (image) => {
+    const url = image?.Link || image?.link || image?.url || image?.href;
+    if (!url) return;
+    media.push({
+      type: 'image',
+      url,
+      alt: image?.name || image?.title || image?.alt || 'Imagem',
+    });
+  };
+
+  const pushVideo = (video) => {
+    const url = video?.Link || video?.link || video?.url || video?.href;
+    if (!url) return;
+    media.push({
+      type: 'video',
+      url,
+      title: video?.name || video?.title || 'Vídeo',
+    });
+  };
+
+  candidates.forEach((item) => {
+    if (!item) return;
+
+    if (Array.isArray(item.images)) item.images.forEach(pushImage);
+    if (Array.isArray(item.Images)) item.Images.forEach(pushImage);
+    if (Array.isArray(item.videos)) item.videos.forEach(pushVideo);
+    if (Array.isArray(item.Videos)) item.Videos.forEach(pushVideo);
+
+    if (Array.isArray(item.media)) {
+      item.media.forEach((entry) => {
+        const type = String(entry?.type || '').toLowerCase();
+        if (type === 'image') pushImage(entry);
+        if (type === 'video') pushVideo(entry);
+      });
+    }
+
+    if (item.image) pushImage(item.image);
+    if (item.video) pushVideo(item.video);
+  });
+
+  return media;
+};
+
 // POST - Iniciar nova conversa
 export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
   try {
@@ -161,11 +237,11 @@ export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
     });
     logHandshakeSnapshot('before /chat', url, headers, { payload });
     
-    const response = await fetch(url, {
+    const response = await fetchWithAuthRetry(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
-    });
+    }, '/chat', () => getHeaders({ includeJsonContentType: true }));
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Erro desconhecido');
@@ -198,14 +274,14 @@ export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
 // POST - Enviar mensagem em conversa existente
 export const sendChatMessage = async (sessionId, message) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/chat/${sessionId}/message`, {
+    const response = await fetchWithAuthRetry(`${API_BASE_URL}/chat/${sessionId}/message`, {
       method: 'POST',
       headers: getHeaders({ includeJsonContentType: true }),
       body: JSON.stringify({
         message,
         language: 'pt-BR', // ✅ Força respostas em português
       }),
-    });
+    }, '/chat/{sessionId}/message', () => getHeaders({ includeJsonContentType: true }));
 
     if (!response.ok) {
       throw new Error('Erro ao enviar mensagem');
@@ -236,10 +312,10 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
     console.log('🌊 Iniciando streaming para sessão:', sessionId);
     console.log('🔗 URL do stream:', url);
     
-    const response = await fetch(url, {
+    const response = await fetchWithAuthRetry(url, {
       method: 'GET',
       headers: getHeaders({ includeJsonContentType: false }),
-    });
+    }, '/chat/stream/{sessionId}', () => getHeaders({ includeJsonContentType: false }));
 
     console.log('📡 Resposta do stream:', {
       status: response.status,
@@ -321,27 +397,22 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
               continue;
             }
 
-            if (data.event === 'media') {
-              const media = [];
-              if (Array.isArray(data.videos)) {
-                data.videos.forEach((video) => {
-                  media.push({
-                    type: 'video',
-                    title: video.name || video.title,
-                    url: video.Link || video.link || video.url
-                  });
-                });
+            const eventName = String(data.event || data.type || '').toLowerCase();
+            const isMediaEvent =
+              eventName === 'media' ||
+              eventName === 'related_media' ||
+              eventName === 'resources';
+
+            if (isMediaEvent || data.media || data.images || data.videos || data.Images || data.Videos) {
+              const media = normalizeMediaItems([
+                data,
+                data.payload,
+                data.data,
+                data.resources,
+              ]);
+              if (media.length > 0) {
+                onChunk('', fullText, { media });
               }
-              if (Array.isArray(data.images)) {
-                data.images.forEach((image) => {
-                  media.push({
-                    type: 'image',
-                    url: image.Link || image.link || image.url,
-                    alt: image.name || image.title
-                  });
-                });
-              }
-              onChunk('', fullText, { media });
               continue;
             }
             
@@ -383,11 +454,11 @@ export const getChatHistory = async () => {
     console.log('📡 Buscando histórico de conversas...');
     logHandshakeSnapshot('before /chat/history', url, headers);
     
-    const response = await fetch(url, {
+    const response = await fetchWithAuthRetry(url, {
       method: 'GET',
       headers,
       signal: controller.signal,
-    });
+    }, '/chat/history', () => getHeaders({ includeJsonContentType: false }));
 
     clearTimeout(timeoutId);
 
@@ -437,10 +508,10 @@ export const loadChat = async (sessionId) => {
       headers: maskAuthorizationHeader(headers)
     });
     
-    const response = await fetch(url, {
+    const response = await fetchWithAuthRetry(url, {
       method: 'GET',
       headers,
-    });
+    }, '/chat/history/{sessionId}', () => getHeaders({ includeJsonContentType: false }));
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -461,13 +532,13 @@ export const loadChat = async (sessionId) => {
 // PATCH - Renomear conversa
 export const renameChat = async (sessionId, title) => {
   try {
-    const response = await fetch(`${API_BASE_URL}/chat/${sessionId}/title`, {
+    const response = await fetchWithAuthRetry(`${API_BASE_URL}/chat/${sessionId}/title`, {
       method: 'PATCH',
       headers: getHeaders({ includeJsonContentType: true }),
       body: JSON.stringify({
         title,
       }),
-    });
+    }, '/chat/{sessionId}/title', () => getHeaders({ includeJsonContentType: true }));
 
     if (!response.ok) {
       throw new Error('Erro ao renomear conversa');
@@ -493,11 +564,11 @@ export const sendFeedback = async (sessionId, messageId, rating, comment = '') =
     
     console.log('📤 Enviando feedback:', payload);
     
-    const response = await fetch(`${API_BASE_URL}/chat/feedback`, {
+    const response = await fetchWithAuthRetry(`${API_BASE_URL}/chat/feedback`, {
       method: 'POST',
       headers: getHeaders({ includeJsonContentType: true }),
       body: JSON.stringify(payload),
-    });
+    }, '/chat/feedback', () => getHeaders({ includeJsonContentType: true }));
 
     if (!response.ok) {
       // Tenta pegar detalhes do erro do backend
@@ -536,10 +607,10 @@ export const deleteChat = async (sessionId) => {
     try {
       console.log('🗑️ Tentando deletar conversa em:', endpoint);
       
-      const response = await fetch(endpoint, {
+      const response = await fetchWithAuthRetry(endpoint, {
         method: 'DELETE',
         headers: getHeaders({ includeJsonContentType: false }),
-      });
+      }, '/chat/{sessionId} (delete)', () => getHeaders({ includeJsonContentType: false }));
 
       if (response.ok) {
         console.log('✅ Conversa deletada com sucesso no backend!');

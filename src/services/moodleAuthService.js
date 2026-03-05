@@ -7,6 +7,10 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ||
 const isEmbeddedIframe = () =>
   typeof window !== 'undefined' && window.parent && window.parent !== window;
 
+const RELOAD_ONCE_KEY = 'senai_moodle_reauth_reload_once';
+const RESTORE_CHAT_ON_RELOAD_KEY = 'senai_restore_chat_after_validation';
+const RESTORE_DRAFT_ON_RELOAD_KEY = 'senai_restore_draft_after_validation';
+
 const decodeBase64Url = (value) => {
   if (!value) return null;
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
@@ -132,6 +136,11 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
     }
 
     setToken(accessToken);
+    try {
+      sessionStorage.removeItem(RELOAD_ONCE_KEY);
+    } catch (_error) {
+      // noop
+    }
 
     const user = data?.user || data?.profile || data || {};
     console.log('Sessao Moodle validada com exchange');
@@ -152,6 +161,199 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
 export const isFromMoodle = () => {
   const { token, origin } = getMoodleTokenFromURL();
   return !!(token && origin === 'moodle');
+};
+
+const getStoredMoodleToken = () => {
+  try {
+    const fromSession = sessionStorage.getItem('moodle_token');
+    if (fromSession) return fromSession;
+  } catch (_error) {
+    // noop
+  }
+
+  const { token } = getMoodleTokenFromURL();
+  return token || null;
+};
+
+const persistChatToRestoreAfterReload = () => {
+  try {
+    const url = new URL(window.location.href);
+    const sessionIdFromUrl = url.searchParams.get('session_id');
+    const activeConfirmed = localStorage.getItem('activeChatIdConfirmed');
+    const activeFromStorage = localStorage.getItem('activeChatId');
+    const chatIdToRestore = sessionIdFromUrl || activeConfirmed || activeFromStorage;
+    if (chatIdToRestore) {
+      sessionStorage.setItem(RESTORE_CHAT_ON_RELOAD_KEY, chatIdToRestore);
+    }
+  } catch (_error) {
+    // noop
+  }
+};
+
+const getMoodleReturnUrlFromContext = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const explicitReturn =
+      params.get('return_url') ||
+      params.get('moodle_return_url') ||
+      params.get('redirect_url');
+    if (explicitReturn) return explicitReturn;
+  } catch (_error) {
+    // noop
+  }
+
+  try {
+    if (document.referrer && document.referrer.startsWith('http')) {
+      return document.referrer;
+    }
+  } catch (_error) {
+    // noop
+  }
+
+  return '';
+};
+
+const requestMoodleTokenFromBridge = (timeoutMs = 4000) => {
+  return new Promise((resolve) => {
+    const canUseParent = isEmbeddedIframe();
+    const canUseOpener =
+      typeof window !== 'undefined' &&
+      !!window.opener &&
+      window.opener !== window;
+
+    if (!canUseParent && !canUseOpener) {
+      resolve(null);
+      return;
+    }
+
+    let referrerOrigin = '';
+    try {
+      referrerOrigin = document.referrer ? new URL(document.referrer).origin : '';
+    } catch (_error) {
+      referrerOrigin = '';
+    }
+    const configuredOrigin = import.meta.env.VITE_MOODLE_ORIGIN || '';
+    let returnUrlOrigin = '';
+    try {
+      const returnUrl = getMoodleReturnUrlFromContext();
+      returnUrlOrigin = returnUrl ? new URL(returnUrl).origin : '';
+    } catch (_error) {
+      returnUrlOrigin = '';
+    }
+    const allowedOrigins = [configuredOrigin, referrerOrigin].filter(Boolean);
+    if (returnUrlOrigin && !allowedOrigins.includes(returnUrlOrigin)) {
+      allowedOrigins.push(returnUrlOrigin);
+    }
+    const targetOrigin = configuredOrigin || returnUrlOrigin || referrerOrigin || '*';
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', handleMessage);
+      clearTimeout(timer);
+      resolve(value || null);
+    };
+
+    const handleMessage = (event) => {
+      if (allowedOrigins.length > 0 && !allowedOrigins.includes(event.origin)) return;
+      const data = event?.data;
+      if (!data || data.type !== 'SENAI_MOODLE_TOKEN' || !data.token) return;
+      finish(String(data.token));
+    };
+
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    window.addEventListener('message', handleMessage);
+
+    let sent = false;
+    if (canUseParent) {
+      try {
+        window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_TOKEN' }, targetOrigin);
+        sent = true;
+      } catch (_error) {
+        // noop
+      }
+    }
+    if (canUseOpener) {
+      try {
+        window.opener.postMessage({ type: 'SENAI_REQUEST_MOODLE_TOKEN' }, targetOrigin);
+        sent = true;
+      } catch (_error) {
+        // noop
+      }
+    }
+    if (!sent) {
+      finish(null);
+    }
+  });
+};
+
+export const refreshAccessTokenFromMoodle = async ({
+  allowParentTokenRequest = true,
+  reloadOnFailure = true,
+} = {}) => {
+  try {
+    let token = getStoredMoodleToken();
+
+    if (token) {
+      const result = await validateMoodleSession(token, 'moodle', 'chat');
+      if (result?.ok) return true;
+    }
+
+    if (allowParentTokenRequest) {
+      const parentToken = await requestMoodleTokenFromBridge(4000);
+      if (parentToken) {
+        try {
+          sessionStorage.setItem('moodle_token', parentToken);
+        } catch (_error) {
+          // noop
+        }
+        const result = await validateMoodleSession(parentToken, 'moodle', 'chat');
+        if (result?.ok) return true;
+      }
+    }
+
+    if (reloadOnFailure && isEmbeddedIframe()) {
+      try {
+        const alreadyReloaded = sessionStorage.getItem(RELOAD_ONCE_KEY) === '1';
+        if (!alreadyReloaded) {
+          persistChatToRestoreAfterReload();
+          sessionStorage.setItem(RESTORE_DRAFT_ON_RELOAD_KEY, '1');
+          sessionStorage.setItem(RELOAD_ONCE_KEY, '1');
+          let redirectedToParent = false;
+          try {
+            const referrerUrl = document.referrer || '';
+            if (referrerUrl) {
+              const referrerOrigin = new URL(referrerUrl).origin;
+              const configuredOrigin = import.meta.env.VITE_MOODLE_ORIGIN || '';
+              const canUseReferrer = !configuredOrigin || configuredOrigin === referrerOrigin;
+              if (canUseReferrer && window.top) {
+                window.top.location.href = referrerUrl;
+                redirectedToParent = true;
+              }
+            }
+          } catch (_error) {
+            redirectedToParent = false;
+          }
+
+          if (!redirectedToParent) {
+            window.location.reload();
+          }
+          return false;
+        }
+      } catch (_error) {
+        // noop
+      }
+    }
+
+    // No modo expandido (fora do iframe), não redireciona para o Moodle.
+    // A renovação tenta via opener/postMessage; se não conseguir, retorna false
+    // para a UI tratar a sessão expirada localmente.
+
+    return false;
+  } catch (_error) {
+    return false;
+  }
 };
 
 /**
