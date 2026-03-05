@@ -8,6 +8,37 @@ function AIMessageContent({ message }) {
   const [imageErrors, setImageErrors] = useState({});
   const [lightboxImage, setLightboxImage] = useState(null);
 
+  const getPdfViewerUrl = (reference) => {
+    let contentSourceId =
+      reference?.contentSourceId ||
+      reference?.content_source_id ||
+      reference?.contentId ||
+      reference?.id;
+
+    let page = Number(reference?.targetPage || reference?.page || 1);
+
+    if (!contentSourceId && typeof reference?.link === 'string') {
+      try {
+        const parsed = new URL(reference.link, window.location.origin);
+        const path = parsed.pathname || '';
+        const viewerMatch = path.match(/\/api\/viewer\/(\d+)/i);
+        const contentMatch = path.match(/\/api\/content\/(\d+)/i);
+        contentSourceId = viewerMatch?.[1] || contentMatch?.[1] || null;
+        const pageFromQuery = Number(parsed.searchParams.get('page'));
+        if (Number.isFinite(pageFromQuery) && pageFromQuery > 0) {
+          page = pageFromQuery;
+        }
+      } catch (_error) {
+        // noop
+      }
+    }
+
+    if (!contentSourceId) return null;
+
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    return `/pdf/${contentSourceId}?page=${safePage}`;
+  };
+
   const isEmbeddedIframe = () =>
     typeof window !== 'undefined' && window.parent && window.parent !== window;
 
@@ -141,16 +172,27 @@ function AIMessageContent({ message }) {
                 Fonte: {ref.source || ref.title || ref}
                 {ref.page && `, paginas: ${ref.page}`}
                 {ref.chapter && `, ${ref.chapter}`}
-                {ref.link && (
+                {(getPdfViewerUrl(ref) || ref.link) && (
                   <div className="mt-1">
-                    <a
-                      href={ref.link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[#E84910] hover:underline"
-                    >
-                      {ref.source || ref.title || 'Abrir apostila'}
-                    </a>
+                    {getPdfViewerUrl(ref) ? (
+                      <a
+                        href={getPdfViewerUrl(ref)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#E84910] hover:underline"
+                      >
+                        {ref.source || ref.title || 'Abrir apostila'}
+                      </a>
+                    ) : (
+                      <a
+                        href={ref.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[#E84910] hover:underline"
+                      >
+                        {ref.source || ref.title || 'Abrir apostila'}
+                      </a>
+                    )}
                   </div>
                 )}
               </div>

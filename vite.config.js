@@ -5,8 +5,8 @@ import path from "path"
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
 
-  // âœ… Base URL: "/" para Firebase, "/local/teste_dev/react/" para Moodle
-  base: mode === 'development' ? '/' : './',
+  // Base absoluta para suportar refresh/rotas profundas no Firebase Hosting
+  base: '/',
 
   resolve: {
     alias: {
