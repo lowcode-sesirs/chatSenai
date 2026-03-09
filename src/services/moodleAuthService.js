@@ -167,6 +167,20 @@ const getStoredMoodleToken = () => {
     // noop
   }
 
+  try {
+    const fromLocal = localStorage.getItem('moodle_token');
+    if (fromLocal) {
+      try {
+        sessionStorage.setItem('moodle_token', fromLocal);
+      } catch (_syncError) {
+        // noop
+      }
+      return fromLocal;
+    }
+  } catch (_error) {
+    // noop
+  }
+
   const { token } = getMoodleTokenFromURL();
   return token || null;
 };
@@ -301,6 +315,7 @@ export const refreshAccessTokenFromMoodle = async ({
       if (parentToken) {
         try {
           sessionStorage.setItem('moodle_token', parentToken);
+          localStorage.setItem('moodle_token', parentToken);
         } catch (_error) {
           // noop
         }
