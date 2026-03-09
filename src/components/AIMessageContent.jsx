@@ -16,6 +16,8 @@ function AIMessageContent({ message }) {
       reference?.id;
 
     let page = Number(reference?.targetPage || reference?.page || 1);
+    let legacyViewToken = null;
+    let legacyViewerPath = null;
 
     if (!contentSourceId && typeof reference?.link === 'string') {
       try {
@@ -28,6 +30,13 @@ function AIMessageContent({ message }) {
         if (Number.isFinite(pageFromQuery) && pageFromQuery > 0) {
           page = pageFromQuery;
         }
+
+        const hashParams = new URLSearchParams((parsed.hash || '').replace(/^#/, ''));
+        legacyViewToken =
+          hashParams.get('token') ||
+          parsed.searchParams.get('token') ||
+          parsed.searchParams.get('view_token');
+        legacyViewerPath = path;
       } catch (_error) {
         // noop
       }
@@ -36,7 +45,13 @@ function AIMessageContent({ message }) {
     if (!contentSourceId) return null;
 
     const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
-    return `/pdf/${contentSourceId}?page=${safePage}`;
+
+    if (legacyViewToken && legacyViewerPath && /\/api\/viewer\/\d+/i.test(legacyViewerPath)) {
+      return `${legacyViewerPath}?page=${safePage}#token=${encodeURIComponent(legacyViewToken)}`;
+    }
+
+    const params = new URLSearchParams({ page: String(safePage) });
+    return `/pdf/${contentSourceId}?${params.toString()}`;
   };
 
   const isEmbeddedIframe = () =>

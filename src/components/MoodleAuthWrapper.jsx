@@ -7,6 +7,7 @@ import {
   storeMoodleUser,
   getMoodleUser
 } from '../services/moodleAuthService';
+import { getToken } from '../services/tokenStore';
 
 /**
  * Componente wrapper que valida a autenticação do Moodle
@@ -70,6 +71,27 @@ function MoodleAuthWrapper({ children }) {
         // Verifica se veio do Moodle com token (apenas em produção)
         if (fromMoodleRequest) {
           const { token, origin, page } = getMoodleTokenFromURL();
+
+          const existingToken = getToken();
+          const existingMoodleUser = getMoodleUser();
+          if (
+            existingToken &&
+            existingMoodleUser &&
+            (existingMoodleUser.userId || existingMoodleUser.userName || existingMoodleUser.userEmail)
+          ) {
+            setAuthState({
+              loading: false,
+              authenticated: true,
+              user: existingMoodleUser,
+              error: null
+            });
+
+            const url = new URL(window.location);
+            url.searchParams.delete('moodle_token');
+            url.searchParams.delete('token');
+            window.history.replaceState({}, '', url);
+            return;
+          }
           
           console.log('🔐 Token Moodle detectado, validando...');
           
@@ -106,6 +128,30 @@ function MoodleAuthWrapper({ children }) {
             url.searchParams.delete('token');
             window.history.replaceState({}, '', url);
           } else {
+            if (result.error === 'invalid_session') {
+              const fallbackMoodleToken = sessionStorage.getItem('moodle_token');
+              if (fallbackMoodleToken && fallbackMoodleToken !== token) {
+                const fallbackResult = await validateMoodleSession(fallbackMoodleToken, origin, page);
+                if (fallbackResult.ok) {
+                  const fallbackUserData = {
+                    userId: fallbackResult.userId,
+                    userName: fallbackResult.userName,
+                    userEmail: fallbackResult.userEmail,
+                    fromMoodle: true
+                  };
+
+                  storeMoodleUser(fallbackUserData);
+                  setAuthState({
+                    loading: false,
+                    authenticated: true,
+                    user: fallbackUserData,
+                    error: null
+                  });
+                  return;
+                }
+              }
+            }
+
             const decodedUser = decodeMoodleToken(token);
             if (decodedUser && decodedUser.userId) {
               console.warn('⚠️ Validação falhou, usando dados do token localmente.');

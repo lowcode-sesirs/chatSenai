@@ -23,8 +23,8 @@ const decodeBase64Url = (value) => {
 export const decodeMoodleToken = (token) => {
   if (!token || typeof token !== 'string') return null;
   const parts = token.split('.');
-  if (parts.length < 1) return null;
-  const payload = decodeBase64Url(parts[0]);
+  if (parts.length < 2) return null;
+  const payload = decodeBase64Url(parts[1]);
   if (!payload) return null;
   try {
     const data = JSON.parse(payload);
@@ -66,12 +66,6 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
 
     if (!moodleToken) {
       return { ok: false, error: 'missing_moodle_token' };
-    }
-
-    try {
-      sessionStorage.setItem('moodle_token', moodleToken);
-    } catch (_error) {
-      // noop
     }
 
     const apiRoot = API_BASE_URL.replace(/\/+$/, '');
@@ -132,6 +126,12 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
     }
 
     setToken(accessToken);
+    try {
+      sessionStorage.setItem('moodle_token', moodleToken);
+      localStorage.setItem('moodle_token', moodleToken);
+    } catch (_error) {
+      // noop
+    }
 
     const user = data?.user || data?.profile || data || {};
     console.log('Sessao Moodle validada com exchange');
