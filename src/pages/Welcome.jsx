@@ -5,6 +5,7 @@ import { getMoodleUser } from '../services/moodleAuthService';
 import AIMessageContent from '../components/AIMessageContent';
 import HistorySidebar from '../components/HistorySidebar';
 import useMoodleBridge from '../hooks/useMoodleBridge';
+import { buildChatRoute, pickChatIdFromSearch } from '../utils/chatRouteSync';
 import historicoIcon from '../assets/historico.png';
 import questionIcon from '../assets/question.png';
 import fiergsSenaiLogo from '../assets/senai.png';
@@ -21,6 +22,10 @@ const RESTORE_DRAFT_ON_RELOAD_KEY = 'senai_restore_draft_after_validation';
 const DRAFT_CHAT_STATE_KEY = 'senai_draft_chat_state';
 const CHAT_WRITER_LOCK_PREFIX = 'senai_chat_writer_lock_';
 const CHAT_WRITER_LOCK_TTL_MS = 15000;
+const ACTIVE_CHAT_ID_KEY = 'activeChatId';
+const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
+const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
+const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
 
 function Welcome() {
   const [message, setMessage] = useState('');
@@ -150,23 +155,32 @@ function Welcome() {
     }, [])
   });
 
-  const postChatRouteUpdateToParent = (chatId) => {
+  const persistActiveChatState = (chatId, isDraft = false) => {
+    if (!chatId) return;
+    try {
+      localStorage.setItem(ACTIVE_CHAT_ID_KEY, chatId);
+      localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      localStorage.setItem(PENDING_EXPAND_CHAT_ID_KEY, chatId);
+      localStorage.setItem(PENDING_EXPAND_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+    } catch (error) {
+      console.warn('Falha ao persistir chat ativo para expandir:', error);
+    }
+  };
+
+  const postChatRouteUpdateToParent = (chatId, isDraft = false) => {
     if (!chatId) return;
 
     try {
       if (!(window.parent && window.parent !== window)) return;
 
-      const url = new URL(window.location.href);
-      url.searchParams.set('session_id', chatId);
-      url.searchParams.delete('active_chat_id');
-      url.searchParams.delete('chat_id');
-      url.searchParams.delete('sid');
-      url.searchParams.delete('active_chat_draft');
+      persistActiveChatState(chatId, isDraft);
+      const route = buildChatRoute(window.location.href, chatId, { isDraft });
+      window.history.replaceState({}, '', route);
 
       window.parent.postMessage(
         {
           type: 'CHAT_ROUTE_UPDATE',
-          route: `${url.pathname}${url.search}${url.hash}`,
+          route,
         },
         '*'
       );
@@ -179,17 +193,19 @@ function Welcome() {
     try {
       if (!(window.parent && window.parent !== window)) return;
 
-      const url = new URL(window.location.href);
-      url.searchParams.delete('session_id');
-      url.searchParams.delete('active_chat_id');
-      url.searchParams.delete('chat_id');
-      url.searchParams.delete('sid');
-      url.searchParams.delete('active_chat_draft');
+      const route = buildChatRoute(window.location.href, null, { isDraft: false });
+      window.history.replaceState({}, '', route);
+      try {
+        localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+        localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+      } catch (_error) {
+        // noop
+      }
 
       window.parent.postMessage(
         {
           type: 'CHAT_ROUTE_UPDATE',
-          route: `${url.pathname}${url.search}${url.hash}`,
+          route,
         },
         '*'
       );
@@ -1318,14 +1334,13 @@ Status: Erro 500 - Problema interno do servidor`;
         console.warn('Falha ao ler chat pendente de restauracao:', error);
       }
         try {
-          const urlParams = new URLSearchParams(window.location.search);
-          const sessionIdFromUrl = urlParams.get('session_id');
+          const sessionIdFromUrl = pickChatIdFromSearch(window.location.search);
           hasSessionIdParam = !!sessionIdFromUrl;
           if (sessionIdFromUrl) {
             storedChatId = sessionIdFromUrl;
           }
           if (storedChatId) {
-            localStorage.setItem('activeChatId', storedChatId);
+            localStorage.setItem(ACTIVE_CHAT_ID_KEY, storedChatId);
           }
         } catch (error) {
           console.warn('Falha ao ler session_id da URL:', error);
@@ -1333,9 +1348,18 @@ Status: Erro 500 - Problema interno do servidor`;
 
       try {
         if (!storedChatId && hasSessionIdParam) {
+          const pendingExpandChatId =
+            !(window.parent && window.parent !== window)
+              ? localStorage.getItem(PENDING_EXPAND_CHAT_ID_KEY)
+              : null;
           storedChatId =
+            pendingExpandChatId ||
             localStorage.getItem('activeChatIdConfirmed') ||
-            localStorage.getItem('activeChatId');
+            localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+          if (pendingExpandChatId) {
+            localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+            localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+          }
         }
       } catch (error) {
         console.warn('Falha ao ler activeChatId do localStorage:', error);
@@ -1431,7 +1455,8 @@ Status: Erro 500 - Problema interno do servidor`;
 
     // Atualiza imediatamente o chat ativo para o widget maximizado abrir limpo
     try {
-      localStorage.setItem('activeChatId', newSessionId);
+      localStorage.setItem(ACTIVE_CHAT_ID_KEY, newSessionId);
+      localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, '1');
     } catch (error) {
       console.warn('Falha ao salvar novo activeChatId no localStorage:', error);
     }
@@ -1512,7 +1537,9 @@ Status: Erro 500 - Problema interno do servidor`;
     if (!activeChatId) return;
 
     try {
-      localStorage.setItem('activeChatId', activeChatId);
+      localStorage.setItem(ACTIVE_CHAT_ID_KEY, activeChatId);
+      const hasUserMessages = messages.some((msg) => msg.type === 'user');
+      localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, hasUserMessages ? '0' : '1');
       if (currentChatId) {
         localStorage.setItem('activeChatIdConfirmed', currentChatId);
       }
