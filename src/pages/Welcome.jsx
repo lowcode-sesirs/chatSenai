@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Pencil, Square } from 'lucide-react';
+import { ArrowDown, Pencil, Square } from 'lucide-react';
 import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
 import { clearMoodleUser, getMoodleUser } from '../services/moodleAuthService';
 import { clearToken } from '../services/tokenStore';
@@ -57,8 +57,10 @@ function Welcome() {
   ]);
   const [feedbackGiven, setFeedbackGiven] = useState({}); // Rastreia feedback dado por messageId
   const [copiedMessages, setCopiedMessages] = useState({}); // Rastreia mensagens copiadas
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   // deletados são tratados pelo backend
   const messagesEndRef = useRef(null);
+  const mainScrollRef = useRef(null);
   const ACTIVE_CHAT_ID_KEY = 'activeChatId';
   const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
   const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
@@ -202,6 +204,34 @@ function Welcome() {
     if (!hasUserMessages) return;
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const updateScrollToBottomButton = () => {
+    const container = mainScrollRef.current;
+    if (!container) return;
+    const threshold = 24;
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    setShowScrollToBottom(distanceToBottom > threshold);
+  };
+
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    if (!hasUserMessages) {
+      setShowScrollToBottom(false);
+      return;
+    }
+    const rafId = requestAnimationFrame(() => {
+      updateScrollToBottomButton();
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [messages]);
+
+  const handleScrollMain = () => {
+    updateScrollToBottomButton();
+  };
+
+  const handleScrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
 
   useEffect(() => {
     const updateMoodleUser = () => {
@@ -1664,7 +1694,7 @@ Status: Erro 500 - Problema interno do servidor`;
       </header>
 
       {/* Main Content - Scrollable */}
-      <main className="flex-1 min-h-0 overflow-y-auto">
+      <main ref={mainScrollRef} onScroll={handleScrollMain} className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-[900px] mx-auto px-3 md:px-6 w-full py-6 md:py-12">
           {/* Logo and Welcome */}
           <div className="text-center mb-8 md:mb-16">
@@ -1986,6 +2016,26 @@ Status: Erro 500 - Problema interno do servidor`;
           )}
         </div>
       </main>
+
+      {showScrollToBottom && (
+        <button
+          type="button"
+          onClick={handleScrollToBottom}
+          aria-label="Ir para o fim"
+          className="fixed left-1/2 -translate-x-1/2 z-40 flex items-center justify-center rounded-full"
+          style={{
+            bottom: '180px',
+            width: '32px',
+            height: '32px',
+            border: '1px solid rgba(255,255,255,0.35)',
+            background: 'rgba(90, 90, 90, 0.35)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)'
+          }}
+        >
+          <ArrowDown size={20} color="#fff" strokeWidth={2.2} />
+        </button>
+      )}
 
       {/* Input Area - Fixed at bottom */}
       <div className="flex-shrink-0 bg-white border-t border-gray-200 pb-4 md:pb-8">
