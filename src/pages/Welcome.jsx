@@ -43,6 +43,8 @@ function Welcome() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
+  const [isExpandedOverlayOpen, setIsExpandedOverlayOpen] = useState(false);
+  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -183,6 +185,15 @@ function Welcome() {
 
     window.addEventListener('message', handleParentExpandSync);
     return () => window.removeEventListener('message', handleParentExpandSync);
+  }, []);
+
+  useEffect(() => {
+    const handleChatExpanded = () => {
+      setIsExpandedOverlayOpen(true);
+    };
+
+    window.addEventListener('senai_chat_expanded', handleChatExpanded);
+    return () => window.removeEventListener('senai_chat_expanded', handleChatExpanded);
   }, []);
 
   // Scroll automático para o final quando novas mensagens chegam
@@ -1215,12 +1226,12 @@ Status: Erro 500 - Problema interno do servidor`;
           storedChatIsDraft = localStorage.getItem(ACTIVE_CHAT_DRAFT_KEY) === '1';
 
           // Prioridade:
-          // 1) pendingExpandChatId (último chat escolhido no iframe para expandir)
-          // 2) active_chat_id/chat_id/session_id explícitos na URL do expandido
+          // 1) active_chat_id/chat_id/session_id explícitos na URL do expandido
+          // 2) pendingExpandChatId (fallback para integrações que não enviam URL atualizada)
           // 3) activeChatId local (fallback)
           // Não usamos mais sid/session_id legado para evitar restaurar chat antigo por engano.
-          storedChatId = pendingExpandChatId || explicitChatIdFromUrl || localActiveChatId;
-          if (pendingExpandChatId) {
+          storedChatId = explicitChatIdFromUrl || pendingExpandChatId || localActiveChatId;
+          if (!explicitChatIdFromUrl && pendingExpandChatId) {
             storedChatIsDraft = pendingExpandIsDraft;
             localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
             localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
@@ -1366,6 +1377,57 @@ Status: Erro 500 - Problema interno do servidor`;
     setHistoryLoaded(false);
     
     console.log('âœ… Nova conversa iniciada!');
+  };
+
+  const handleResumeConversationHere = async () => {
+    const activeId = currentChatId || sessionId;
+    if (!activeId) {
+      setIsExpandedOverlayOpen(false);
+      return;
+    }
+
+    setIsRefreshingHistory(true);
+    try {
+      const chatData = await loadChat(activeId);
+      if (!chatData) {
+        throw new Error('Conversa não encontrada');
+      }
+
+      const messagesToLoad = extractMessagesFromChatData(chatData, null);
+      setCurrentChatId(activeId);
+      setSessionId(activeId);
+      setChatTitle(generateCorrectTitle(chatData));
+      setMessages(
+        messagesToLoad.length > 0
+          ? formatMessagesForUI(messagesToLoad)
+          : [
+              {
+                id: 1,
+                type: 'ai',
+                text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+                isWelcome: true,
+                timestamp: new Date(),
+                messageId: 'welcome-msg'
+              }
+            ]
+      );
+      setFeedbackGiven({});
+      setCopiedMessages({});
+      setIsExpandedOverlayOpen(false);
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } catch (error) {
+      console.error('Erro ao retomar conversa no iframe:', error);
+      // Se a autenticação expirar durante o refresh, mantém a conversa atual em tela.
+      // O fluxo de renovação de sessão continua no próximo envio/requisição.
+      setIsExpandedOverlayOpen(false);
+    } finally {
+      setIsRefreshingHistory(false);
+    }
+  };
+
+  const handleStartNewConversationHere = () => {
+    setIsExpandedOverlayOpen(false);
+    handleNewChat();
   };
 
   const handleTitleEdit = () => {
@@ -2035,6 +2097,34 @@ Status: Erro 500 - Problema interno do servidor`;
                 className="w-full px-4 py-2.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
               >
                 Não, quero continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isExpandedOverlayOpen && (
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center px-4">
+          <div className="w-full max-w-md rounded-xl bg-white shadow-lg border border-gray-200 p-6">
+            <p className="text-sm text-gray-700 mb-5">
+              Esta conversa foi aberta em uma nova aba. Para continuar aqui, atualize o conteúdo.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleResumeConversationHere}
+                disabled={isRefreshingHistory}
+                className="w-full px-4 py-2.5 text-sm rounded-md bg-[#E84910] text-white hover:bg-[#d4410d] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isRefreshingHistory ? 'Atualizando...' : 'Retomar conversa aqui'}
+              </button>
+              <button
+                type="button"
+                onClick={handleStartNewConversationHere}
+                disabled={isRefreshingHistory}
+                className="w-full px-4 py-2.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Iniciar nova conversa
               </button>
             </div>
           </div>

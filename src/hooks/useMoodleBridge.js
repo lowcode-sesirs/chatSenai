@@ -6,14 +6,49 @@ const MOODLE_PARENT_ORIGIN = "https://pocsesi-rs.asdnet.com.br";
 const buildCurrentRoute = (location) =>
   `${location.pathname}${location.search}${location.hash}`;
 
+const getMoodleTokenForRoute = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    return (
+      params.get("moodle_token") ||
+      params.get("token") ||
+      sessionStorage.getItem("moodle_token") ||
+      localStorage.getItem("moodle_token") ||
+      null
+    );
+  } catch (_error) {
+    return null;
+  }
+};
+
+const ensureRouteHasMoodleToken = (route) => {
+  if (typeof window === "undefined") return route;
+  const token = getMoodleTokenForRoute();
+  if (!token) return route;
+
+  try {
+    const parsed = new URL(route, window.location.origin);
+    if (!parsed.searchParams.get("moodle_token") && !parsed.searchParams.get("token")) {
+      parsed.searchParams.set("moodle_token", token);
+    }
+    if (!parsed.searchParams.get("origin")) {
+      parsed.searchParams.set("origin", "moodle");
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash || ""}`;
+  } catch (_error) {
+    return route;
+  }
+};
+
 const notifyParentRoute = (route) => {
   if (typeof window === "undefined") return;
   if (!window.parent || window.parent === window) return;
+  const safeRoute = ensureRouteHasMoodleToken(route);
 
   window.parent.postMessage(
     {
       type: "CHAT_ROUTE_UPDATE",
-      route,
+      route: safeRoute,
     },
     MOODLE_PARENT_ORIGIN
   );
@@ -43,6 +78,15 @@ export const useMoodleBridge = () => {
   useEffect(() => {
     const handleMessage = (event) => {
       const data = event?.data;
+      if (data?.type === "CHAT_EXPANDED" && event.origin === MOODLE_PARENT_ORIGIN) {
+        try {
+          window.dispatchEvent(new CustomEvent("senai_chat_expanded"));
+        } catch (_error) {
+          // noop
+        }
+        return;
+      }
+
       if (!data || data.type !== "MOODLE_CHAT_EXPAND_CLICKED") return;
       console.log("MOODLE_CHAT_EXPAND_CLICKED recebido:", data);
 
