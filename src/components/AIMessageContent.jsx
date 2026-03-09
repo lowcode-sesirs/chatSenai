@@ -86,9 +86,50 @@ function AIMessageContent({ message }) {
   };
 
 
+  const renderBoldSegments = (text, keyPrefix) => {
+    const ESCAPED_ASTERISK_TOKEN = '__ESCAPED_ASTERISK__';
+    const safeText = text.replace(/\\\*/g, ESCAPED_ASTERISK_TOKEN);
+    const boldRegex = /(\*\*([\s\S]+?)\*\*|\*([\s\S]+?)\*)/g;
+    const chunks = [];
+    let lastIndex = 0;
+    let match;
+    let chunkIndex = 0;
+
+    while ((match = boldRegex.exec(safeText)) !== null) {
+      if (match.index > lastIndex) {
+        chunks.push(
+          safeText.slice(lastIndex, match.index).replaceAll(ESCAPED_ASTERISK_TOKEN, '*')
+        );
+      }
+
+      const boldText = (match[2] || match[3] || '')
+        .replaceAll(ESCAPED_ASTERISK_TOKEN, '*')
+        .trim();
+      if (boldText) {
+        chunks.push(
+          <strong key={`${keyPrefix}-bold-${chunkIndex}`} className="font-semibold">
+            {boldText}
+          </strong>
+        );
+      } else {
+        chunks.push(match[0].replaceAll(ESCAPED_ASTERISK_TOKEN, '*'));
+      }
+
+      lastIndex = boldRegex.lastIndex;
+      chunkIndex += 1;
+    }
+
+    if (lastIndex < safeText.length) {
+      chunks.push(safeText.slice(lastIndex).replaceAll(ESCAPED_ASTERISK_TOKEN, '*'));
+    }
+
+    return chunks.length > 0 ? chunks : [text];
+  };
+
   const renderTextWithVideoLinks = (text) => {
+    const normalizedText = text.replace(/^\s*[*-]\s+/gm, '');
     const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const parts = text.split(urlRegex);
+    const parts = normalizedText.split(urlRegex);
 
     return parts.map((part, index) => {
       if (part.match(urlRegex)) {
@@ -104,7 +145,7 @@ function AIMessageContent({ message }) {
           </a>
         );
       }
-      return part;
+      return renderBoldSegments(part, `text-${index}`);
     });
   };
 

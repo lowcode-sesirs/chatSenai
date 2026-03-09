@@ -16,6 +16,12 @@ import sendIcon from '../assets/Send.solid.png';
 import copiarIcon from '../assets/copiar.png';
 import novaConversaIcon from '../assets/novaConversa.png';
 
+const RESTORE_CHAT_ON_RELOAD_KEY = 'senai_restore_chat_after_validation';
+const RESTORE_DRAFT_ON_RELOAD_KEY = 'senai_restore_draft_after_validation';
+const DRAFT_CHAT_STATE_KEY = 'senai_draft_chat_state';
+const CHAT_WRITER_LOCK_PREFIX = 'senai_chat_writer_lock_';
+const CHAT_WRITER_LOCK_TTL_MS = 15000;
+
 function Welcome() {
   const [message, setMessage] = useState('');
   const [moodleUser, setMoodleUser] = useState(() => getMoodleUser());
@@ -55,9 +61,77 @@ function Welcome() {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [isExpandedOverlayOpen, setIsExpandedOverlayOpen] = useState(false);
   const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
+  const [isReadOnlyByLock, setIsReadOnlyByLock] = useState(false);
   // deletados são tratados pelo backend
   const messagesEndRef = useRef(null);
   const mainScrollRef = useRef(null);
+  const tabIdRef = useRef(`tab-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`);
+
+  const getLockKey = (chatId) => `${CHAT_WRITER_LOCK_PREFIX}${chatId}`;
+
+  const readWriterLock = useCallback((chatId) => {
+    if (!chatId) return null;
+    try {
+      const raw = localStorage.getItem(getLockKey(chatId));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.tabId || !parsed?.timestamp) return null;
+      return parsed;
+    } catch (_error) {
+      return null;
+    }
+  }, []);
+
+  const acquireWriterLock = useCallback((chatId) => {
+    if (!chatId) return true;
+    try {
+      const lock = readWriterLock(chatId);
+      const nowTs = Date.now();
+      const isOwner = lock?.tabId === tabIdRef.current;
+      const isStale = !lock || nowTs - Number(lock.timestamp) > CHAT_WRITER_LOCK_TTL_MS;
+
+      if (!isOwner && !isStale) {
+        setIsReadOnlyByLock(true);
+        return false;
+      }
+
+      const nextLock = JSON.stringify({ tabId: tabIdRef.current, timestamp: nowTs });
+      localStorage.setItem(getLockKey(chatId), nextLock);
+      setIsReadOnlyByLock(false);
+      return true;
+    } catch (_error) {
+      return true;
+    }
+  }, [readWriterLock]);
+
+  useEffect(() => {
+    const activeChatId = currentChatId;
+    if (!activeChatId) {
+      setIsReadOnlyByLock(false);
+      return;
+    }
+
+    const heartbeat = () => {
+      acquireWriterLock(activeChatId);
+    };
+
+    heartbeat();
+    const intervalId = setInterval(heartbeat, 5000);
+
+    const onStorage = (event) => {
+      if (event.key !== getLockKey(activeChatId)) return;
+      const lock = readWriterLock(activeChatId);
+      const isOwner = lock?.tabId === tabIdRef.current;
+      const isStale = !lock || Date.now() - Number(lock.timestamp) > CHAT_WRITER_LOCK_TTL_MS;
+      setIsReadOnlyByLock(!isOwner && !isStale);
+    };
+
+    window.addEventListener('storage', onStorage);
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [currentChatId, acquireWriterLock, readWriterLock]);
 
   const moodleOrigin = (() => {
     const envOrigin = import.meta.env.VITE_MOODLE_ORIGIN;
@@ -533,6 +607,52 @@ function Welcome() {
   };
 
   const formatMessagesForUI = (messagesToLoad) => {
+    const normalizeMediaEntries = (payload) => {
+      if (!payload) return [];
+
+      const candidates = Array.isArray(payload) ? payload : [payload];
+      const collected = [];
+
+      const pushImage = (image) => {
+        const url = normalizeMediaUrl(image?.Link || image?.link || image?.url || image?.href);
+        if (!url) return;
+        collected.push({
+          type: 'image',
+          url,
+          alt: image?.name || image?.title || image?.alt || 'Imagem',
+        });
+      };
+
+      const pushVideo = (video) => {
+        const url = normalizeMediaUrl(video?.Link || video?.link || video?.url || video?.href);
+        if (!url) return;
+        collected.push({
+          type: 'video',
+          url,
+          title: video?.name || video?.title || 'Vídeo',
+          source: video?.source,
+        });
+      };
+
+      candidates.forEach((candidate) => {
+        if (!candidate) return;
+        if (Array.isArray(candidate.images)) candidate.images.forEach(pushImage);
+        if (Array.isArray(candidate.Images)) candidate.Images.forEach(pushImage);
+        if (Array.isArray(candidate.videos)) candidate.videos.forEach(pushVideo);
+        if (Array.isArray(candidate.Videos)) candidate.Videos.forEach(pushVideo);
+
+        if (Array.isArray(candidate.media)) {
+          candidate.media.forEach((entry) => {
+            const type = String(entry?.type || '').toLowerCase();
+            if (type === 'image') pushImage(entry);
+            if (type === 'video') pushVideo(entry);
+          });
+        }
+      });
+
+      return collected;
+    };
+
     return messagesToLoad.map((msg, index) => {
       let messageType = 'ai';
       if (msg.type) {
@@ -562,31 +682,17 @@ function Welcome() {
         }));
       }
 
-      let media = Array.isArray(msg.media) ? msg.media : null;
-      if (!media && mediaPayload) {
-        const collected = [];
-        if (Array.isArray(mediaPayload.videos)) {
-          mediaPayload.videos.forEach((video) => {
-            collected.push({
-              type: 'video',
-              title: video.name || video.title,
-              url: normalizeMediaUrl(video.Link || video.link || video.url),
-              source: video.source
-            });
-          });
-        }
-        if (Array.isArray(mediaPayload.images)) {
-          mediaPayload.images.forEach((image) => {
-            collected.push({
-              type: 'image',
-              url: normalizeMediaUrl(image.Link || image.link || image.url),
-              alt: image.name || image.title
-            });
-          });
-        }
-        if (collected.length > 0) {
-          media = collected;
-        }
+      let media = normalizeMediaEntries(msg.media);
+      if (media.length === 0 && mediaPayload) {
+        media = normalizeMediaEntries([
+          mediaPayload,
+          mediaPayload?.payload,
+          mediaPayload?.data,
+          mediaPayload?.resources,
+        ]);
+      }
+      if (media.length === 0) {
+        media = null;
       }
 
       return {
@@ -607,6 +713,11 @@ function Welcome() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (message.trim() && !isLoading) {
+      if (currentChatId && !acquireWriterLock(currentChatId)) {
+        window.alert('Esta conversa está ativa em outra janela. Volte para essa janela para continuar.');
+        return;
+      }
+
       const userMessageText = message.trim();
       const userMsgId = `user-msg-${Date.now()}`;
       
@@ -661,6 +772,11 @@ function Welcome() {
           
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
+          try {
+            localStorage.setItem('activeChatIdConfirmed', currentSessionId);
+          } catch (_error) {
+            // noop
+          }
           postChatRouteUpdateToParent(currentSessionId);
 
           const backendTitle =
@@ -1064,6 +1180,11 @@ Status: Erro 500 - Problema interno do servidor`;
       const chatId = chat.id || chat.session_id || chat.chat_id;
       setCurrentChatId(chatId);
       setSessionId(chatId);
+      try {
+        localStorage.setItem('activeChatIdConfirmed', chatId);
+      } catch (_error) {
+        // noop
+      }
       postChatRouteUpdateToParent(chatId);
       
       // Atualiza o título usando a mesma lógica do histórico
@@ -1125,6 +1246,11 @@ Status: Erro 500 - Problema interno do servidor`;
       const chatId = chat.id || chat.session_id || chat.chat_id;
       setCurrentChatId(chatId);
       setSessionId(chatId);
+      try {
+        localStorage.setItem('activeChatIdConfirmed', chatId);
+      } catch (_error) {
+        // noop
+      }
       setChatTitle(generateCorrectTitle(chat));
       
       // Mensagem padrão em caso de erro
@@ -1151,13 +1277,53 @@ Status: Erro 500 - Problema interno do servidor`;
   useEffect(() => {
     let ignore = false;
     const restoreActiveChat = async () => {
+      let shouldTryDraftRestore = false;
+      try {
+        shouldTryDraftRestore = sessionStorage.getItem(RESTORE_DRAFT_ON_RELOAD_KEY) === '1';
+      } catch (_error) {
+        shouldTryDraftRestore = false;
+      }
+
+      if (shouldTryDraftRestore) {
+        try {
+          const rawDraft = sessionStorage.getItem(DRAFT_CHAT_STATE_KEY);
+          const draft = rawDraft ? JSON.parse(rawDraft) : null;
+          if (draft && Array.isArray(draft.messages) && draft.messages.some((m) => m?.type === 'user')) {
+            const restoredSessionId = draft.sessionId || generateUUID();
+            setSessionId(restoredSessionId);
+            setCurrentChatId(null);
+            setChatTitle(draft.chatTitle || 'Chat sem título');
+            setMessages(draft.messages);
+            setFeedbackGiven({});
+            setCopiedMessages({});
+            localStorage.setItem('activeChatId', restoredSessionId);
+            sessionStorage.removeItem(RESTORE_DRAFT_ON_RELOAD_KEY);
+            return;
+          }
+        } catch (error) {
+          console.warn('Falha ao restaurar rascunho do chat:', error);
+        }
+      }
+
       let storedChatId = null;
       let hasSessionIdParam = false;
+      let shouldClearRestoreKey = false;
+      try {
+        const restoreChatId = sessionStorage.getItem(RESTORE_CHAT_ON_RELOAD_KEY);
+        if (restoreChatId) {
+          storedChatId = restoreChatId;
+          shouldClearRestoreKey = true;
+        }
+      } catch (error) {
+        console.warn('Falha ao ler chat pendente de restauracao:', error);
+      }
         try {
           const urlParams = new URLSearchParams(window.location.search);
           const sessionIdFromUrl = urlParams.get('session_id');
           hasSessionIdParam = !!sessionIdFromUrl;
-          storedChatId = sessionIdFromUrl;
+          if (sessionIdFromUrl) {
+            storedChatId = sessionIdFromUrl;
+          }
           if (storedChatId) {
             localStorage.setItem('activeChatId', storedChatId);
           }
@@ -1167,7 +1333,9 @@ Status: Erro 500 - Problema interno do servidor`;
 
       try {
         if (!storedChatId && hasSessionIdParam) {
-          storedChatId = localStorage.getItem('activeChatId');
+          storedChatId =
+            localStorage.getItem('activeChatIdConfirmed') ||
+            localStorage.getItem('activeChatId');
         }
       } catch (error) {
         console.warn('Falha ao ler activeChatId do localStorage:', error);
@@ -1190,6 +1358,9 @@ Status: Erro 500 - Problema interno do servidor`;
 
           if (match) {
             await handleLoadChat(match);
+            if (shouldClearRestoreKey) {
+              sessionStorage.removeItem(RESTORE_CHAT_ON_RELOAD_KEY);
+            }
             return;
           }
         }
@@ -1201,12 +1372,20 @@ Status: Erro 500 - Problema interno do servidor`;
           if (!chatData) {
             console.log('Chat inexistente no backend, limpando activeChatId.');
             localStorage.removeItem('activeChatId');
+            if (shouldClearRestoreKey) {
+              sessionStorage.removeItem(RESTORE_CHAT_ON_RELOAD_KEY);
+            }
             return;
           }
 
           const messagesToLoad = extractMessagesFromChatData(chatData, null);
         setCurrentChatId(storedChatId);
         setSessionId(storedChatId);
+        try {
+          localStorage.setItem('activeChatIdConfirmed', storedChatId);
+        } catch (_error) {
+          // noop
+        }
         setChatTitle(generateCorrectTitle(chatData));
 
         if (messagesToLoad.length > 0) {
@@ -1226,6 +1405,9 @@ Status: Erro 500 - Problema interno do servidor`;
 
         setFeedbackGiven({});
         setCopiedMessages({});
+        if (shouldClearRestoreKey) {
+          sessionStorage.removeItem(RESTORE_CHAT_ON_RELOAD_KEY);
+        }
       } catch (error) {
         console.error('Erro ao restaurar chat ativo:', error);
       }
@@ -1331,11 +1513,77 @@ Status: Erro 500 - Problema interno do servidor`;
 
     try {
       localStorage.setItem('activeChatId', activeChatId);
+      if (currentChatId) {
+        localStorage.setItem('activeChatIdConfirmed', currentChatId);
+      }
     } catch (error) {
       console.warn('Falha ao salvar activeChatId no localStorage:', error);
     }
 
   }, [messages, currentChatId, sessionId]);
+
+  useEffect(() => {
+    try {
+      const hasUserMessages = messages.some((msg) => msg.type === 'user');
+      if (!hasUserMessages) {
+        sessionStorage.removeItem(DRAFT_CHAT_STATE_KEY);
+        return;
+      }
+
+      if (currentChatId) {
+        sessionStorage.removeItem(DRAFT_CHAT_STATE_KEY);
+        return;
+      }
+
+      const draftPayload = {
+        sessionId,
+        chatTitle,
+        messages,
+        savedAt: new Date().toISOString(),
+      };
+      sessionStorage.setItem(DRAFT_CHAT_STATE_KEY, JSON.stringify(draftPayload));
+    } catch (_error) {
+      // noop
+    }
+  }, [messages, sessionId, currentChatId, chatTitle]);
+
+  useEffect(() => {
+    if (!currentChatId) return;
+
+    const syncFromBackend = async () => {
+      try {
+        const chatData = await loadChat(currentChatId);
+        if (!chatData) return;
+        const messagesToLoad = extractMessagesFromChatData(chatData, null);
+        if (messagesToLoad.length > 0) {
+          setMessages(formatMessagesForUI(messagesToLoad));
+        }
+        const nextTitle = generateCorrectTitle(chatData);
+        if (nextTitle) {
+          setChatTitle(nextTitle);
+        }
+      } catch (_error) {
+        // noop
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        syncFromBackend();
+      }
+    };
+
+    const onFocus = () => {
+      syncFromBackend();
+    };
+
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [currentChatId]);
 
   const handleTitleChange = (e) => {
     setChatTitle(e.target.value);
@@ -1965,24 +2213,25 @@ Status: Erro 500 - Problema interno do servidor`;
               ) : (
                 // Estado normal - textarea editável
                 <>
-                  <textarea
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
+	                  <textarea
+	                    value={message}
+	                    onChange={(e) => setMessage(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         handleSubmit(e);
                       }
                     }}
-                    placeholder="No que posso te ajudar hoje?"
-                    className="w-full rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base resize-none"
-                    style={{ height: '80px', borderColor: '#262626', padding: '12px 56px 12px 12px' }}
-                    rows={1}
-                  />
-                  <button
-                    type="submit"
-                    disabled={isLoading}
-                    className="absolute hover:opacity-80 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center rounded-md"
+	                    placeholder={isReadOnlyByLock ? "Conversa ativa em outra janela." : "No que posso te ajudar hoje?"}
+	                    className="w-full rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base resize-none"
+	                    style={{ height: '80px', borderColor: '#262626', padding: '12px 56px 12px 12px' }}
+	                    rows={1}
+	                    disabled={isReadOnlyByLock}
+	                  />
+	                  <button
+	                    type="submit"
+	                    disabled={isLoading || isReadOnlyByLock}
+	                    className="absolute hover:opacity-80 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center rounded-md"
                     style={{ 
                       right: '12px', 
                       top: '12px',
@@ -2001,9 +2250,14 @@ Status: Erro 500 - Problema interno do servidor`;
                           : 'none'
                       }}
                     />
-                  </button>
-                </>
-              )}
+	                  </button>
+	                  {isReadOnlyByLock && (
+	                    <p className="mt-1 text-xs text-amber-700">
+	                      Esta conversa está aberta em outra janela. Volte para ela para continuar.
+	                    </p>
+	                  )}
+	                </>
+	              )}
             </form>
             
             <p className="text-center text-xs text-gray-500 px-4">
