@@ -2,7 +2,7 @@
  * Utilitário para verificar saúde do backend
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://backend-311313028224.southamerica-east1.run.app/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
 /**
  * Testa se o backend está respondendo

@@ -6,130 +6,19 @@
  */
 function AIMessageContent({ message }) {
   const [imageErrors, setImageErrors] = useState({});
-  const [lightboxImage, setLightboxImage] = useState(null);
 
   const getPdfViewerUrl = (reference) => {
-    let contentSourceId =
-      reference?.contentSourceId ||
-      reference?.content_source_id ||
-      reference?.contentId ||
-      reference?.id;
-
-    let page = Number(reference?.targetPage || reference?.page || 1);
-    let legacyViewToken = null;
-    let legacyViewerPath = null;
-
-    if (!contentSourceId && typeof reference?.link === 'string') {
-      try {
-        const parsed = new URL(reference.link, window.location.origin);
-        const path = parsed.pathname || '';
-        const viewerMatch = path.match(/\/api\/viewer\/(\d+)/i);
-        const contentMatch = path.match(/\/api\/content\/(\d+)/i);
-        contentSourceId = viewerMatch?.[1] || contentMatch?.[1] || null;
-        const pageFromQuery = Number(parsed.searchParams.get('page'));
-        if (Number.isFinite(pageFromQuery) && pageFromQuery > 0) {
-          page = pageFromQuery;
-        }
-
-        const hashParams = new URLSearchParams((parsed.hash || '').replace(/^#/, ''));
-        legacyViewToken =
-          hashParams.get('token') ||
-          parsed.searchParams.get('token') ||
-          parsed.searchParams.get('view_token');
-        legacyViewerPath = path;
-      } catch (_error) {
-        // noop
-      }
-    }
-
+    const contentSourceId = reference?.contentSourceId || reference?.id;
     if (!contentSourceId) return null;
-
+    const page = Number(reference?.targetPage || 1);
     const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
-
-    if (legacyViewToken && legacyViewerPath && /\/api\/viewer\/\d+/i.test(legacyViewerPath)) {
-      return `${legacyViewerPath}?page=${safePage}#token=${encodeURIComponent(legacyViewToken)}`;
-    }
-
-    const params = new URLSearchParams({ page: String(safePage) });
-    return `/pdf/${contentSourceId}?${params.toString()}`;
+    return `/pdf/${contentSourceId}?page=${safePage}`;
   };
 
-  const isEmbeddedIframe = () =>
-    typeof window !== 'undefined' && window.parent && window.parent !== window;
-
-  const handleOpenImage = (img) => {
-    if (!img?.url) return;
-
-    if (isEmbeddedIframe()) {
-      try {
-        window.parent.postMessage(
-          {
-            type: 'CHAT_IMAGE_LIGHTBOX_OPEN',
-            image: {
-              url: img.url,
-              alt: img.alt || 'Imagem do conteúdo',
-              title: img.alt || 'Imagem do conteúdo',
-            }
-          },
-          '*'
-        );
-        return;
-      } catch (error) {
-        console.warn('Falha ao solicitar lightbox de imagem ao parent:', error);
-      }
-    }
-
-    setLightboxImage({
-      url: img.url,
-      alt: img.alt || 'Imagem do conteúdo'
-    });
-  };
-
-
-  const renderBoldSegments = (text, keyPrefix) => {
-    const ESCAPED_ASTERISK_TOKEN = '__ESCAPED_ASTERISK__';
-    const safeText = text.replace(/\\\*/g, ESCAPED_ASTERISK_TOKEN);
-    const boldRegex = /(\*\*([\s\S]+?)\*\*|\*([\s\S]+?)\*)/g;
-    const chunks = [];
-    let lastIndex = 0;
-    let match;
-    let chunkIndex = 0;
-
-    while ((match = boldRegex.exec(safeText)) !== null) {
-      if (match.index > lastIndex) {
-        chunks.push(
-          safeText.slice(lastIndex, match.index).replaceAll(ESCAPED_ASTERISK_TOKEN, '*')
-        );
-      }
-
-      const boldText = (match[2] || match[3] || '')
-        .replaceAll(ESCAPED_ASTERISK_TOKEN, '*')
-        .trim();
-      if (boldText) {
-        chunks.push(
-          <strong key={`${keyPrefix}-bold-${chunkIndex}`} className="font-semibold">
-            {boldText}
-          </strong>
-        );
-      } else {
-        chunks.push(match[0].replaceAll(ESCAPED_ASTERISK_TOKEN, '*'));
-      }
-
-      lastIndex = boldRegex.lastIndex;
-      chunkIndex += 1;
-    }
-
-    if (lastIndex < safeText.length) {
-      chunks.push(safeText.slice(lastIndex).replaceAll(ESCAPED_ASTERISK_TOKEN, '*'));
-    }
-
-    return chunks.length > 0 ? chunks : [text];
-  };
 
   const renderTextWithVideoLinks = (text) => {
-    const normalizedText = text.replace(/^\s*[*-]\s+/gm, '');
     const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const parts = normalizedText.split(urlRegex);
+    const parts = text.split(urlRegex);
 
     return parts.map((part, index) => {
       if (part.match(urlRegex)) {
@@ -145,7 +34,7 @@ function AIMessageContent({ message }) {
           </a>
         );
       }
-      return renderBoldSegments(part, `text-${index}`);
+      return part;
     });
   };
 
@@ -162,21 +51,14 @@ function AIMessageContent({ message }) {
           {images.map((img, index) => (
             <div key={index} className="rounded-lg overflow-hidden border border-gray-200 w-full md:w-[200px]">
               {!imageErrors[index] ? (
-                <button
-                  type="button"
-                  className="block w-full text-left"
-                  onClick={() => handleOpenImage(img)}
-                  title="Abrir imagem"
-                  aria-label="Abrir imagem"
-                  style={{ background: 'none', border: 'none', padding: 0 }}
-                >
+                <a href={img.url} target="_blank" rel="noopener noreferrer" className="block">
                   <img
                     src={img.url}
                     alt={img.alt || 'Imagem do conteúdo'}
                     className="w-full h-auto cursor-pointer"
                     onError={() => setImageErrors((prev) => ({ ...prev, [index]: true }))}
                   />
-                </button>
+                </a>
               ) : (
                 <div className="bg-gray-100 p-4 text-center text-gray-500 text-sm">
                   Imagem não disponível
@@ -301,39 +183,6 @@ function AIMessageContent({ message }) {
       {message.media && renderImages(message.media)}
       {message.references && renderReferences(message.references)}
       {message.suggested_topics && renderSuggestedTopics(message.suggested_topics)}
-
-      {lightboxImage && (
-        <div
-          className="fixed inset-0 z-[1000] bg-black/70 flex items-center justify-center p-4"
-          onClick={() => setLightboxImage(null)}
-        >
-          <div
-            className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between p-3 border-b border-gray-200">
-              <span className="text-sm font-medium text-gray-700 truncate">
-                {lightboxImage.alt || 'Imagem'}
-              </span>
-              <button
-                type="button"
-                onClick={() => setLightboxImage(null)}
-                className="text-sm px-3 py-1 rounded hover:bg-gray-100"
-                title="Fechar"
-              >
-                Fechar
-              </button>
-            </div>
-            <div className="p-3 max-h-[calc(90vh-56px)] overflow-auto flex items-center justify-center">
-              <img
-                src={lightboxImage.url}
-                alt={lightboxImage.alt || 'Imagem'}
-                className="max-w-full h-auto"
-              />
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

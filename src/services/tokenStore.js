@@ -1,27 +1,30 @@
-const TOKEN_KEY = "senai_access_token";
+const TOKEN_KEY = 'senai_access_token';
 
 let accessToken = null;
 
-const canUseSessionStorage = () => typeof window !== "undefined" && !!window.sessionStorage;
-const canUseLocalStorage = () => typeof window !== "undefined" && !!window.localStorage;
+const canUseSessionStorage = () => typeof window !== 'undefined' && !!window.sessionStorage;
+const canUseLocalStorage = () => typeof window !== 'undefined' && !!window.localStorage;
+const isEmbeddedIframe = () =>
+  typeof window !== 'undefined' && window.parent && window.parent !== window;
 
 export const getToken = () => {
   if (accessToken) return accessToken;
 
   if (canUseSessionStorage()) {
-    const storedToken = sessionStorage.getItem(TOKEN_KEY);
-    if (storedToken) {
-      accessToken = storedToken;
+    const storedSession = sessionStorage.getItem(TOKEN_KEY);
+    if (storedSession) {
+      accessToken = storedSession;
       return accessToken;
     }
   }
 
-  if (canUseLocalStorage()) {
-    const storedToken = localStorage.getItem(TOKEN_KEY);
-    if (storedToken) {
-      accessToken = storedToken;
+  // Em iframe do Moodle, evita reaproveitar token de outro contexto/conta via localStorage.
+  if (!isEmbeddedIframe() && canUseLocalStorage()) {
+    const storedLocal = localStorage.getItem(TOKEN_KEY);
+    if (storedLocal) {
+      accessToken = storedLocal;
       if (canUseSessionStorage()) {
-        sessionStorage.setItem(TOKEN_KEY, storedToken);
+        sessionStorage.setItem(TOKEN_KEY, storedLocal);
       }
     }
   }
@@ -40,7 +43,8 @@ export const setToken = (token) => {
     }
   }
 
-  if (canUseLocalStorage()) {
+  // Em iframe, persiste somente em sessionStorage para reduzir vazamento entre contas.
+  if (!isEmbeddedIframe() && canUseLocalStorage()) {
     if (accessToken) {
       localStorage.setItem(TOKEN_KEY, accessToken);
     } else {
@@ -51,11 +55,9 @@ export const setToken = (token) => {
 
 export const clearToken = () => {
   accessToken = null;
-
   if (canUseSessionStorage()) {
     sessionStorage.removeItem(TOKEN_KEY);
   }
-
   if (canUseLocalStorage()) {
     localStorage.removeItem(TOKEN_KEY);
   }

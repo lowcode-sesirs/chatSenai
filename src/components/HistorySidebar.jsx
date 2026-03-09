@@ -4,41 +4,11 @@ import { X, Trash2, RefreshCw } from 'lucide-react';
  * Gera título no formato "Chat DD/MM/AAAA" baseado na data da conversa
  */
 const generateDisplayTitle = (chat) => {
-  const titleCandidates = [
-    chat?.chat_title,
-    chat?.session_title,
-    chat?.title,
-    chat?.name,
-  ];
-
-  const cleanTitle = (value) => {
-    if (typeof value !== 'string') return '';
-    return value.trim();
-  };
-
-  const isPlaceholderTitle = (value) => {
-    if (!value) return true;
-
-    const normalized = value
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-
-    if (normalized === 'chat sem titulo') return true;
-    if (/^chat\s+\d{2}\/\d{2}\/\d{4}$/i.test(value.trim())) return true;
-
-    return false;
-  };
-
-  const preferredTitle = titleCandidates
-    .map(cleanTitle)
-    .find((value) => value && !isPlaceholderTitle(value));
-
-  if (preferredTitle) {
-    return preferredTitle;
+  const backendTitle = chat?.title;
+  if (typeof backendTitle === 'string' && backendTitle.trim()) {
+    return backendTitle.trim();
   }
-
-  return 'Chat sem titulo';
+  return 'Sem titulo';
 };
 
 /**
@@ -121,10 +91,10 @@ function HistorySidebar({ isOpen, onClose, history, onSelectChat, isLoading, onR
                           </h4>
                           <div className="flex items-center gap-2 ml-2">
                             <span className="text-xs text-gray-400 whitespace-nowrap">
-                              {formatTime(chat.timestamp || chat.updated_at || chat.created_at || chat.date)}
+                              {formatTime(chat.timestamp || chat.created_at || chat.date)}
                             </span>
                             {canDeleteChat && (
-                              <button 
+                              <button
                                 className="transition-opacity flex-shrink-0 hover:opacity-70"
                                 title="Excluir conversa"
                                 onClick={(e) => {
@@ -176,7 +146,7 @@ function groupByDate(history) {
   const groups = {};
 
   history.forEach((chat) => {
-    const chatDate = new Date(chat.timestamp || chat.updated_at || chat.created_at || chat.date);
+    const chatDate = new Date(chat.timestamp || chat.created_at || chat.date);
     const chatDay = new Date(chatDate.getFullYear(), chatDate.getMonth(), chatDate.getDate());
     
     const diffTime = today - chatDay;
@@ -259,5 +229,3 @@ function formatTime(timestamp) {
 }
 
 export default HistorySidebar;
-
-

@@ -1,5 +1,5 @@
 import { getToken } from './tokenStore';
-import { refreshAccessTokenFromMoodle } from './moodleAuthService';
+import { getMoodleTokenFromURL, validateMoodleSession } from './moodleAuthService';
 
 // Configuração dos endpoints da API
 const RUNTIME_API_BASE_URL =
@@ -10,52 +10,18 @@ const RUNTIME_API_BASE_URL =
 const API_BASE_URL =
   RUNTIME_API_BASE_URL ||
   import.meta.env.VITE_API_BASE_URL ||
-  (import.meta.env.DEV ? '/api' : 'https://backend-311313028224.southamerica-east1.run.app/api');
+  '/api';
 
-const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '';
+const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '{{x-dev-user}}';
 
-const isPlaceholderUserValue = (value) =>
-  !value ||
-  value === 'SEU_VALOR_AQUI' ||
-  value === '{{x-dev-user}}' ||
-  value === 'undefined' ||
-  value === 'null';
-
-const isEmbeddedIframe = () =>
-  typeof window !== 'undefined' && window.parent && window.parent !== window;
-
-const maskAuthorizationHeader = (headers = {}) => {
-  const safeHeaders = { ...headers };
-  if (safeHeaders.Authorization) {
-    safeHeaders.Authorization = 'Bearer ***';
-  }
-  return safeHeaders;
-};
-
-const logHandshakeSnapshot = (context, url, headers, extra = {}) => {
-  try {
-    const moodleTokenFromUrl = new URLSearchParams(window.location.search).get('moodle_token');
-    const moodleTokenFromSession = sessionStorage.getItem('moodle_token');
-    const moodleUserRaw = sessionStorage.getItem('moodle_user');
-    let moodleUser = null;
-    try {
-      moodleUser = moodleUserRaw ? JSON.parse(moodleUserRaw) : null;
-    } catch (_error) {
-      moodleUser = moodleUserRaw;
-    }
-
-    console.log(`🤝 Handshake (${context})`, {
-      url,
-      headers: maskAuthorizationHeader(headers || {}),
-      moodleTokenInUrl: !!moodleTokenFromUrl,
-      moodleTokenInSession: !!moodleTokenFromSession,
-      moodleUser,
-      runtimeMoodleUser: typeof window !== 'undefined' ? window.__MOODLE_USER__ || null : null,
-      ...extra,
-    });
-  } catch (error) {
-    console.warn(`Falha ao registrar handshake (${context}):`, error);
-  }
+const normalizeMessageForRequest = (value) => {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/\n\s*\n+/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 };
 
 console.log('🔧 Configuração da API:', {
@@ -72,7 +38,7 @@ console.log('🔧 Configuração da API:', {
 });
 
 // Função para obter o user_id do Moodle (se disponível)
-export const getMoodleUserId = () => {
+const getMoodleUserId = () => {
   try {
     if (typeof window !== 'undefined') {
       const runtimeUser = window.__MOODLE_USER__;
@@ -95,153 +61,180 @@ export const getMoodleUserId = () => {
       }
     }
 
-    if (!isEmbeddedIframe()) {
-      const moodleUserFromLocal = localStorage.getItem('moodle_user');
-      if (moodleUserFromLocal) {
-        sessionStorage.setItem('moodle_user', moodleUserFromLocal);
-        const userData = JSON.parse(moodleUserFromLocal);
-        if (userData?.userEmail) {
-          return userData.userEmail;
-        }
-        if (userData?.userId && userData.userId !== 'guest') {
-          return userData.userId;
-        }
+    const moodleUserFromLocal = localStorage.getItem('moodle_user');
+    if (moodleUserFromLocal) {
+      sessionStorage.setItem('moodle_user', moodleUserFromLocal);
+      const userData = JSON.parse(moodleUserFromLocal);
+      if (userData?.userEmail) {
+        return userData.userEmail;
+      }
+      if (userData?.userId && userData.userId !== 'guest') {
+        return userData.userId;
       }
     }
   } catch (e) {
     console.warn('Erro ao obter user_id do Moodle:', e);
   }
-  return isPlaceholderUserValue(X_DEV_USER) ? '' : X_DEV_USER;
+  return X_DEV_USER;
 };
 
-// Header padrão - usa user_id do Moodle se disponível
-const getHeaders = ({ includeJsonContentType = true } = {}) => {
+// Header padr?o - usa user_id do Moodle se dispon?vel
+const getAuthToken = () => {
+  const accessToken = getToken();
+  if (accessToken) return accessToken;
+  return null;
+};
+
+const requestFreshMoodleTokenFromParent = async (timeoutMs = 3000) => {
+  if (typeof window === 'undefined' || !window.parent || window.parent === window) {
+    return null;
+  }
+
+  const extractToken = (data) => {
+    if (!data) return null;
+    if (data.moodle_token) return data.moodle_token;
+    if (data.token) return data.token;
+    if (data.payload?.moodle_token) return data.payload.moodle_token;
+    if (data.payload?.token) return data.payload.token;
+    return null;
+  };
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onMessage);
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const onMessage = (event) => {
+      const data = event?.data;
+      const token = extractToken(data);
+      if (!token) return;
+      try {
+        sessionStorage.setItem('moodle_token', token);
+        localStorage.setItem('moodle_token', token);
+      } catch (_error) {
+        // noop
+      }
+      finish(token);
+    };
+
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    window.addEventListener('message', onMessage);
+
+    try {
+      window.parent.postMessage({ type: 'senai_request_moodle_token' }, '*');
+      window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
+    } catch (_error) {
+      finish(null);
+    }
+  });
+};
+
+const getHeaders = ({ json = true } = {}) => {
   let userId = getMoodleUserId();
-  if (isPlaceholderUserValue(userId)) {
+  if (userId === 'SEU_VALOR_AQUI' || userId === '{{x-dev-user}}' || userId === 'undefined') {
     const runtimeUser = typeof window !== 'undefined' ? window.__MOODLE_USER__ : null;
     const runtimeId = runtimeUser?.userId || runtimeUser?.userid || runtimeUser?.user_id || runtimeUser?.id;
     if (runtimeId) {
       userId = runtimeId;
     }
   }
-  if (isPlaceholderUserValue(userId) && !isPlaceholderUserValue(X_DEV_USER)) {
-    userId = X_DEV_USER;
-  }
-  const headers = {};
-  if (!isPlaceholderUserValue(userId)) {
-    headers['x-dev-user'] = userId;
-    headers['moodle_user_id'] = userId;
-  }
-  if (includeJsonContentType) {
+
+  const headers = {
+    'x-dev-user': userId,
+    moodle_user_id: userId,
+  };
+
+  if (json) {
     headers['Content-Type'] = 'application/json';
   }
-  const accessToken = getToken();
-  if (accessToken) {
-    headers.Authorization = `Bearer ${accessToken}`;
+
+  const authToken = getAuthToken();
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
   }
-  console.log('?? Headers sendo enviados:', maskAuthorizationHeader(headers));
+
+  const logSafeHeaders = { ...headers };
+  if (logSafeHeaders.Authorization) {
+    logSafeHeaders.Authorization = 'Bearer ***';
+  }
+  console.log('?? Headers sendo enviados:', logSafeHeaders);
+
   return headers;
 };
 
-const fetchWithAuthRetry = async (url, options, context = 'api', headersFactory = null) => {
-  let response = await fetch(url, options);
+const refreshAccessTokenFromMoodle = async () => {
+  try {
+    const { token, origin, page } = getMoodleTokenFromURL();
+    const fallbackToken = token || sessionStorage.getItem('moodle_token') || localStorage.getItem('moodle_token');
+    if (!fallbackToken) return false;
 
-  if (response.status !== 401) {
-    return response;
-  }
+    let result = await validateMoodleSession(fallbackToken, origin || 'moodle', page || 'chat');
+    if (result?.ok && getToken()) return true;
 
-  console.warn(`401 detectado em ${context}, renovando token via Moodle exchange...`);
-  const refreshed = await refreshAccessTokenFromMoodle({
-    allowParentTokenRequest: true,
-    reloadOnFailure: true,
-  });
-
-  if (!refreshed) {
-    return response;
-  }
-
-  const retriedOptions = {
-    ...options,
-    headers: typeof headersFactory === 'function' ? headersFactory() : options?.headers,
-  };
-
-  response = await fetch(url, retriedOptions);
-  return response;
-};
-
-const normalizeMediaItems = (payload) => {
-  if (!payload) return [];
-
-  const candidates = Array.isArray(payload) ? payload : [payload];
-  const media = [];
-
-  const pushImage = (image) => {
-    const url = image?.Link || image?.link || image?.url || image?.href;
-    if (!url) return;
-    media.push({
-      type: 'image',
-      url,
-      alt: image?.name || image?.title || image?.alt || 'Imagem',
-    });
-  };
-
-  const pushVideo = (video) => {
-    const url = video?.Link || video?.link || video?.url || video?.href;
-    if (!url) return;
-    media.push({
-      type: 'video',
-      url,
-      title: video?.name || video?.title || 'Vídeo',
-    });
-  };
-
-  candidates.forEach((item) => {
-    if (!item) return;
-
-    if (Array.isArray(item.images)) item.images.forEach(pushImage);
-    if (Array.isArray(item.Images)) item.Images.forEach(pushImage);
-    if (Array.isArray(item.videos)) item.videos.forEach(pushVideo);
-    if (Array.isArray(item.Videos)) item.Videos.forEach(pushVideo);
-
-    if (Array.isArray(item.media)) {
-      item.media.forEach((entry) => {
-        const type = String(entry?.type || '').toLowerCase();
-        if (type === 'image') pushImage(entry);
-        if (type === 'video') pushVideo(entry);
-      });
+    if (result?.error === 'invalid_session') {
+      const refreshedToken = await requestFreshMoodleTokenFromParent(3500);
+      if (!refreshedToken) return false;
+      result = await validateMoodleSession(refreshedToken, origin || 'moodle', page || 'chat');
+      return !!(result?.ok && getToken());
     }
 
-    if (item.image) pushImage(item.image);
-    if (item.video) pushVideo(item.video);
-  });
+    return false;
+  } catch (_error) {
+    return false;
+  }
+};
 
-  return media;
+const fetchWithAuthRetry = async (buildRequest) => {
+  // Evita primeira chamada sem Authorization quando ainda existe moodle_token para exchange.
+  if (!getToken()) {
+    await refreshAccessTokenFromMoodle();
+  }
+
+  let { url, options } = buildRequest();
+  let response = await fetch(url, options);
+
+  if (response.status !== 401) return response;
+
+  console.warn('401 detectado, renovando token via Moodle exchange...');
+  const refreshed = await refreshAccessTokenFromMoodle();
+  if (!refreshed) return response;
+
+  ({ url, options } = buildRequest());
+  return fetch(url, options);
 };
 
 // POST - Iniciar nova conversa
 export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
   try {
+    const normalizedMessage = normalizeMessageForRequest(message);
     const url = `${API_BASE_URL}/chat`;
     const payload = {
-      message,
+      message: normalizedMessage,
       course_external_id: courseExternalId,
       language: 'pt-BR', // ✅ Força respostas em português
     };
     
-    const headers = getHeaders({ includeJsonContentType: true });
+    const headers = getHeaders();
 
     console.log('🚀 Iniciando chat:', {
       url,
       payload,
-      headers: maskAuthorizationHeader(headers)
+      headers
     });
-    logHandshakeSnapshot('before /chat', url, headers, { payload });
     
-    const response = await fetchWithAuthRetry(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-    }, '/chat', () => getHeaders({ includeJsonContentType: true }));
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify(payload),
+      },
+    }));
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Erro desconhecido');
@@ -274,14 +267,19 @@ export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
 // POST - Enviar mensagem em conversa existente
 export const sendChatMessage = async (sessionId, message) => {
   try {
-    const response = await fetchWithAuthRetry(`${API_BASE_URL}/chat/${sessionId}/message`, {
-      method: 'POST',
-      headers: getHeaders({ includeJsonContentType: true }),
-      body: JSON.stringify({
-        message,
-        language: 'pt-BR', // ✅ Força respostas em português
-      }),
-    }, '/chat/{sessionId}/message', () => getHeaders({ includeJsonContentType: true }));
+    const normalizedMessage = normalizeMessageForRequest(message);
+    const url = `${API_BASE_URL}/chat/${sessionId}/message`;
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          message: normalizedMessage,
+          language: 'pt-BR',
+        }),
+      },
+    }));
 
     if (!response.ok) {
       throw new Error('Erro ao enviar mensagem');
@@ -312,10 +310,13 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
     console.log('🌊 Iniciando streaming para sessão:', sessionId);
     console.log('🔗 URL do stream:', url);
     
-    const response = await fetchWithAuthRetry(url, {
-      method: 'GET',
-      headers: getHeaders({ includeJsonContentType: false }),
-    }, '/chat/stream/{sessionId}', () => getHeaders({ includeJsonContentType: false }));
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+      },
+    }));
 
     console.log('📡 Resposta do stream:', {
       status: response.status,
@@ -397,22 +398,27 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
               continue;
             }
 
-            const eventName = String(data.event || data.type || '').toLowerCase();
-            const isMediaEvent =
-              eventName === 'media' ||
-              eventName === 'related_media' ||
-              eventName === 'resources';
-
-            if (isMediaEvent || data.media || data.images || data.videos || data.Images || data.Videos) {
-              const media = normalizeMediaItems([
-                data,
-                data.payload,
-                data.data,
-                data.resources,
-              ]);
-              if (media.length > 0) {
-                onChunk('', fullText, { media });
+            if (data.event === 'media') {
+              const media = [];
+              if (Array.isArray(data.videos)) {
+                data.videos.forEach((video) => {
+                  media.push({
+                    type: 'video',
+                    title: video.name || video.title,
+                    url: video.Link || video.link || video.url
+                  });
+                });
               }
+              if (Array.isArray(data.images)) {
+                data.images.forEach((image) => {
+                  media.push({
+                    type: 'image',
+                    url: image.Link || image.link || image.url,
+                    alt: image.name || image.title
+                  });
+                });
+              }
+              onChunk('', fullText, { media });
               continue;
             }
             
@@ -450,15 +456,17 @@ export const getChatHistory = async () => {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     const url = `${API_BASE_URL}/chat/history`;
-    const headers = getHeaders({ includeJsonContentType: false });
+    const headers = getHeaders({ json: false });
     console.log('📡 Buscando histórico de conversas...');
-    logHandshakeSnapshot('before /chat/history', url, headers);
     
-    const response = await fetchWithAuthRetry(url, {
-      method: 'GET',
-      headers,
-      signal: controller.signal,
-    }, '/chat/history', () => getHeaders({ includeJsonContentType: false }));
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+        signal: controller.signal,
+      },
+    }));
 
     clearTimeout(timeoutId);
 
@@ -501,17 +509,16 @@ export const getChatHistory = async () => {
 export const loadChat = async (sessionId) => {
   try {
     const url = `${API_BASE_URL}/chat/history/${sessionId}`;
-    const headers = getHeaders({ includeJsonContentType: false });
-    console.log('Carregando conversa (request)...', {
-      url,
-      method: 'GET',
-      headers: maskAuthorizationHeader(headers)
-    });
+    const headers = getHeaders({ json: false });
+    console.log('📡 Carregando conversa...', { url, method: 'GET', headers });
     
-    const response = await fetchWithAuthRetry(url, {
-      method: 'GET',
-      headers,
-    }, '/chat/history/{sessionId}', () => getHeaders({ includeJsonContentType: false }));
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+      },
+    }));
 
     if (!response.ok) {
       if (response.status === 404) {
@@ -532,13 +539,13 @@ export const loadChat = async (sessionId) => {
 // PATCH - Renomear conversa
 export const renameChat = async (sessionId, title) => {
   try {
-    const response = await fetchWithAuthRetry(`${API_BASE_URL}/chat/${sessionId}/title`, {
+    const response = await fetch(`${API_BASE_URL}/chat/${sessionId}/title`, {
       method: 'PATCH',
-      headers: getHeaders({ includeJsonContentType: true }),
+      headers: getHeaders(),
       body: JSON.stringify({
         title,
       }),
-    }, '/chat/{sessionId}/title', () => getHeaders({ includeJsonContentType: true }));
+    });
 
     if (!response.ok) {
       throw new Error('Erro ao renomear conversa');
@@ -549,6 +556,50 @@ export const renameChat = async (sessionId, title) => {
   } catch (error) {
     console.error('Erro ao renomear conversa:', error);
     throw error;
+  }
+};
+
+// POST - Salvar conversa no histórico
+export const saveChat = async (chatData) => {
+  try {
+    console.log('?? Tentando salvar conversa:', chatData.session_id);
+
+    const params = new URLSearchParams();
+    if (chatData?.session_id) params.set('session_id', chatData.session_id);
+    if (chatData?.title) params.set('title', chatData.title);
+    const query = params.toString();
+    const url = `${API_BASE_URL}/chat/history${query ? `?${query}` : ''}`;
+
+    const response = await fetchWithAuthRetry(() => ({
+      url,
+      options: {
+        method: 'GET',
+        headers: getHeaders({ json: false }),
+      },
+    }));
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Erro desconhecido');
+      console.warn(`?? Erro ${response.status} ao salvar conversa:`, errorText);
+
+      // Se o endpoint n?o existe (404), n?o ? cr?tico
+      if (response.status === 404) {
+        console.log('?? Endpoint /chat/save n?o implementado no backend');
+        return { ok: false, message: 'Endpoint n?o implementado' };
+      }
+
+      throw new Error(`Erro ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    console.log('? Conversa salva com sucesso!');
+    return data;
+  } catch (error) {
+    console.error('? Erro ao salvar conversa:', error.message);
+
+    // N?o propaga o erro para n?o quebrar a aplica??o
+    // O salvamento ? opcional
+    return { ok: false, error: error.message };
   }
 };
 
@@ -564,11 +615,11 @@ export const sendFeedback = async (sessionId, messageId, rating, comment = '') =
     
     console.log('📤 Enviando feedback:', payload);
     
-    const response = await fetchWithAuthRetry(`${API_BASE_URL}/chat/feedback`, {
+    const response = await fetch(`${API_BASE_URL}/chat/feedback`, {
       method: 'POST',
-      headers: getHeaders({ includeJsonContentType: true }),
+      headers: getHeaders(),
       body: JSON.stringify(payload),
-    }, '/chat/feedback', () => getHeaders({ includeJsonContentType: true }));
+    });
 
     if (!response.ok) {
       // Tenta pegar detalhes do erro do backend
@@ -607,10 +658,10 @@ export const deleteChat = async (sessionId) => {
     try {
       console.log('🗑️ Tentando deletar conversa em:', endpoint);
       
-      const response = await fetchWithAuthRetry(endpoint, {
+      const response = await fetch(endpoint, {
         method: 'DELETE',
-        headers: getHeaders({ includeJsonContentType: false }),
-      }, '/chat/{sessionId} (delete)', () => getHeaders({ includeJsonContentType: false }));
+        headers: getHeaders({ json: false }),
+      });
 
       if (response.ok) {
         console.log('✅ Conversa deletada com sucesso no backend!');

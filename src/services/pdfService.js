@@ -11,18 +11,14 @@ export const buildPdfContentUrl = (contentSourceId) =>
 const getMoodleTokenFallback = () => {
   if (typeof window === 'undefined') return null;
 
-  try {
-    const fromSession = sessionStorage.getItem('moodle_token');
-    if (fromSession) return fromSession;
-  } catch (_error) {
-    // noop
-  }
+  const fromSession = sessionStorage.getItem('moodle_token');
+  if (fromSession) return fromSession;
 
   try {
     const fromLocal = localStorage.getItem('moodle_token');
     if (fromLocal) return fromLocal;
-  } catch (_error) {
-    // noop
+  } catch (error) {
+    console.warn('Erro ao ler moodle_token do localStorage:', error);
   }
 
   const params = new URLSearchParams(window.location.search);

@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Pencil, Square } from 'lucide-react';
-import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, deleteChat } from '../services/chatService';
-import { getMoodleUser } from '../services/moodleAuthService';
+import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
+import { clearMoodleUser, getMoodleUser } from '../services/moodleAuthService';
+import { clearToken } from '../services/tokenStore';
 import AIMessageContent from '../components/AIMessageContent';
 import HistorySidebar from '../components/HistorySidebar';
-import useMoodleBridge from '../hooks/useMoodleBridge';
-import { buildChatRoute, pickChatIdFromSearch } from '../utils/chatRouteSync';
 import historicoIcon from '../assets/historico.png';
 import questionIcon from '../assets/question.png';
 import fiergsSenaiLogo from '../assets/senai.png';
@@ -17,21 +17,13 @@ import sendIcon from '../assets/Send.solid.png';
 import copiarIcon from '../assets/copiar.png';
 import novaConversaIcon from '../assets/novaConversa.png';
 
-const RESTORE_CHAT_ON_RELOAD_KEY = 'senai_restore_chat_after_validation';
-const RESTORE_DRAFT_ON_RELOAD_KEY = 'senai_restore_draft_after_validation';
-const DRAFT_CHAT_STATE_KEY = 'senai_draft_chat_state';
-const CHAT_WRITER_LOCK_PREFIX = 'senai_chat_writer_lock_';
-const CHAT_WRITER_LOCK_TTL_MS = 15000;
-const ACTIVE_CHAT_ID_KEY = 'activeChatId';
-const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
-const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
-const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
+const MOODLE_PARENT_ORIGIN = 'https://pocsesi-rs.asdnet.com.br';
 
 function Welcome() {
+  const location = useLocation();
   const [message, setMessage] = useState('');
   const [moodleUser, setMoodleUser] = useState(() => getMoodleUser());
-  const now = new Date();
-  const [chatTitle, setChatTitle] = useState('Chat sem título');
+  const [chatTitle, setChatTitle] = useState('');
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [pendingTitleRename, setPendingTitleRename] = useState(false);
@@ -63,191 +55,142 @@ function Welcome() {
   ]);
   const [feedbackGiven, setFeedbackGiven] = useState({}); // Rastreia feedback dado por messageId
   const [copiedMessages, setCopiedMessages] = useState({}); // Rastreia mensagens copiadas
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [isExpandedOverlayOpen, setIsExpandedOverlayOpen] = useState(false);
-  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
-  const [isReadOnlyByLock, setIsReadOnlyByLock] = useState(false);
   // deletados são tratados pelo backend
   const messagesEndRef = useRef(null);
-  const mainScrollRef = useRef(null);
-  const tabIdRef = useRef(`tab-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`);
+  const ACTIVE_CHAT_ID_KEY = 'activeChatId';
+  const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
+  const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
+  const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
+  const latestActiveChatRef = useRef(null);
+  const latestIsDraftRef = useRef(false);
 
-  const getLockKey = (chatId) => `${CHAT_WRITER_LOCK_PREFIX}${chatId}`;
-
-  const readWriterLock = useCallback((chatId) => {
-    if (!chatId) return null;
-    try {
-      const raw = localStorage.getItem(getLockKey(chatId));
-      if (!raw) return null;
-      const parsed = JSON.parse(raw);
-      if (!parsed?.tabId || !parsed?.timestamp) return null;
-      return parsed;
-    } catch (_error) {
-      return null;
+  const buildExpandedChatParams = (chatId, isDraft = false) => {
+    const params = new URLSearchParams();
+    if (chatId) {
+      params.set('active_chat_id', chatId);
+      params.set('chat_id', chatId);
+      params.set('session_id', chatId);
     }
-  }, []);
-
-  const acquireWriterLock = useCallback((chatId) => {
-    if (!chatId) return true;
-    try {
-      const lock = readWriterLock(chatId);
-      const nowTs = Date.now();
-      const isOwner = lock?.tabId === tabIdRef.current;
-      const isStale = !lock || nowTs - Number(lock.timestamp) > CHAT_WRITER_LOCK_TTL_MS;
-
-      if (!isOwner && !isStale) {
-        setIsReadOnlyByLock(true);
-        return false;
-      }
-
-      const nextLock = JSON.stringify({ tabId: tabIdRef.current, timestamp: nowTs });
-      localStorage.setItem(getLockKey(chatId), nextLock);
-      setIsReadOnlyByLock(false);
-      return true;
-    } catch (_error) {
-      return true;
+    if (isDraft) {
+      params.set('active_chat_draft', '1');
     }
-  }, [readWriterLock]);
+    return params.toString();
+  };
 
-  useEffect(() => {
-    const activeChatId = currentChatId;
-    if (!activeChatId) {
-      setIsReadOnlyByLock(false);
-      return;
-    }
-
-    const heartbeat = () => {
-      acquireWriterLock(activeChatId);
-    };
-
-    heartbeat();
-    const intervalId = setInterval(heartbeat, 5000);
-
-    const onStorage = (event) => {
-      if (event.key !== getLockKey(activeChatId)) return;
-      const lock = readWriterLock(activeChatId);
-      const isOwner = lock?.tabId === tabIdRef.current;
-      const isStale = !lock || Date.now() - Number(lock.timestamp) > CHAT_WRITER_LOCK_TTL_MS;
-      setIsReadOnlyByLock(!isOwner && !isStale);
-    };
-
-    window.addEventListener('storage', onStorage);
-    return () => {
-      clearInterval(intervalId);
-      window.removeEventListener('storage', onStorage);
-    };
-  }, [currentChatId, acquireWriterLock, readWriterLock]);
-
-  const moodleOrigin = (() => {
-    const envOrigin = import.meta.env.VITE_MOODLE_ORIGIN;
-    if (envOrigin) return envOrigin;
-    try {
-      return document.referrer ? new URL(document.referrer).origin : '';
-    } catch (_error) {
-      return '';
-    }
-  })();
-
-  useMoodleBridge({
-    moodleOrigin,
-    onChatExpanded: useCallback(() => {
-      setIsExpandedOverlayOpen(true);
-    }, [])
-  });
-
-  const persistActiveChatState = (chatId, isDraft = false) => {
+  const saveActiveChatState = (chatId, isDraft = false) => {
     if (!chatId) return;
     try {
       localStorage.setItem(ACTIVE_CHAT_ID_KEY, chatId);
       localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
       localStorage.setItem(PENDING_EXPAND_CHAT_ID_KEY, chatId);
       localStorage.setItem(PENDING_EXPAND_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      syncActiveChatInUrl(chatId, isDraft);
+      if (window.parent && window.parent !== window) {
+        const expandedParams = buildExpandedChatParams(chatId, isDraft);
+        const expandedUrl = `${window.location.origin}${window.location.pathname}?${expandedParams}`;
+        const payload = {
+          type: 'senai_active_chat',
+          chatId,
+          active_chat_id: chatId,
+          chat_id: chatId,
+          session_id: chatId,
+          expanded_chat_params: expandedParams,
+          expanded_chat_url: expandedUrl,
+          currentChatId: chatId,
+          isDraft
+        };
+        window.parent.postMessage(payload, MOODLE_PARENT_ORIGIN);
+        // Compatibilidade com integrações antigas do widget maximizado.
+        window.parent.postMessage({ ...payload, type: 'senai_set_active_chat' }, MOODLE_PARENT_ORIGIN);
+      }
     } catch (error) {
-      console.warn('Falha ao persistir chat ativo para expandir:', error);
+      console.warn('Falha ao salvar estado do chat ativo:', error);
     }
   };
 
-  const postChatRouteUpdateToParent = (chatId, isDraft = false) => {
-    if (!chatId) return;
-
+  const syncActiveChatInUrl = (chatId, isDraft = false) => {
     try {
-      if (!(window.parent && window.parent !== window)) return;
-
-      persistActiveChatState(chatId, isDraft);
-      const route = buildChatRoute(window.location.href, chatId, { isDraft });
-      window.history.replaceState({}, '', route);
-
-      window.parent.postMessage(
-        {
-          type: 'CHAT_ROUTE_UPDATE',
-          route,
-        },
-        '*'
-      );
-    } catch (error) {
-      console.warn('Falha ao enviar CHAT_ROUTE_UPDATE:', error);
-    }
-  };
-
-  const postChatRouteClearToParent = () => {
-    try {
-      if (!(window.parent && window.parent !== window)) return;
-
-      const route = buildChatRoute(window.location.href, null, { isDraft: false });
-      window.history.replaceState({}, '', route);
+      const url = new URL(window.location.href);
+      if (chatId) {
+        url.searchParams.set('active_chat_id', chatId);
+        url.searchParams.set('chat_id', chatId);
+        url.searchParams.set('session_id', chatId);
+      } else {
+        url.searchParams.delete('active_chat_id');
+        url.searchParams.delete('chat_id');
+        url.searchParams.delete('session_id');
+      }
+      if (isDraft) {
+        url.searchParams.set('active_chat_draft', '1');
+      } else {
+        url.searchParams.delete('active_chat_draft');
+      }
+      const nextRoute = `${url.pathname}${url.search}${url.hash || ''}`;
+      window.history.replaceState({}, '', `${url.pathname}${url.search}`);
       try {
-        localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
-        localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+        window.dispatchEvent(new CustomEvent('senai_route_sync', { detail: { route: nextRoute } }));
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'CHAT_ROUTE_UPDATE', route: nextRoute }, MOODLE_PARENT_ORIGIN);
+        }
       } catch (_error) {
         // noop
       }
-
-      window.parent.postMessage(
-        {
-          type: 'CHAT_ROUTE_UPDATE',
-          route,
-        },
-        '*'
-      );
     } catch (error) {
-      console.warn('Falha ao enviar CHAT_ROUTE_UPDATE (clear):', error);
+      console.warn('Falha ao sincronizar active_chat_id na URL:', error);
     }
   };
 
-  const updateScrollToBottomButton = () => {
-    const container = mainScrollRef.current;
-    if (!container) return;
-    const threshold = 24;
-    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-    setShowScrollToBottom(distanceToBottom > threshold);
+  const clearActiveChatState = () => {
+    try {
+      localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+      localStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+      syncActiveChatInUrl(null, false);
+    } catch (error) {
+      console.warn('Falha ao limpar estado do chat ativo:', error);
+    }
   };
 
-  // Atualiza visibilidade do botão de âncora ao mudar as mensagens
   useEffect(() => {
     const hasUserMessages = messages.some((msg) => msg.type === 'user');
-    if (!hasUserMessages) {
-      setShowScrollToBottom(false);
-      return;
-    }
-    const rafId = requestAnimationFrame(() => {
-      updateScrollToBottomButton();
-    });
-    return () => cancelAnimationFrame(rafId);
+    const activeChatId = currentChatId || sessionId || null;
+    latestActiveChatRef.current = activeChatId;
+    latestIsDraftRef.current = !hasUserMessages;
+  }, [messages, currentChatId, sessionId]);
+
+  useEffect(() => {
+    const handleParentExpandSync = (event) => {
+      const type = event?.data?.type;
+      if (!type) return;
+      if (
+        ![
+          'senai_request_active_chat',
+          'senai_before_expand',
+          'senai_expand_clicked',
+          'MOODLE_CHAT_EXPAND_CLICKED'
+        ].includes(type)
+      ) {
+        return;
+      }
+
+      const chatId = latestActiveChatRef.current;
+      const isDraft = !!latestIsDraftRef.current;
+      if (!chatId) return;
+
+      saveActiveChatState(chatId, isDraft);
+    };
+
+    window.addEventListener('message', handleParentExpandSync);
+    return () => window.removeEventListener('message', handleParentExpandSync);
+  }, []);
+
+  // Scroll automático para o final quando novas mensagens chegam
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    if (!hasUserMessages) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
-
-  const handleScrollMain = () => {
-    updateScrollToBottomButton();
-  };
-
-  const handleScrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  };
-
-  const scrollToBottomSoon = () => {
-    requestAnimationFrame(() => {
-      handleScrollToBottom();
-    });
-  };
 
   useEffect(() => {
     const updateMoodleUser = () => {
@@ -291,6 +234,11 @@ function Welcome() {
     return 'Aluno';
   };
 
+  const hasUserMessages = messages.some((msg) => msg.type === 'user');
+  const displayChatTitle = hasUserMessages
+    ? ((chatTitle || '').trim() || 'Sem titulo')
+    : 'Chat sem título';
+
   const matchChatToUser = (chat, user) => {
     if (!chat || !user) return false;
     const userId = user.userId ?? user.id ?? null;
@@ -329,21 +277,6 @@ function Welcome() {
 
 
   // Função para carregar histórico (lazy loading)
-  const getHistoryChatId = (chat) => chat?.id || chat?.session_id || chat?.chat_id || null;
-
-  const isPlaceholderHistoryTitle = (value) => {
-    if (!value || typeof value !== 'string') return true;
-    const normalized = value
-      .trim()
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '');
-    if (!normalized) return true;
-    if (normalized === 'chat sem titulo') return true;
-    if (/^chat\s+\d{2}\/\d{2}\/\d{4}$/i.test(value.trim())) return true;
-    return false;
-  };
-
   const loadHistory = async (forceReload = false) => {
     // Se já carregou e não é reload forçado, não recarrega
     if (historyLoaded && !forceReload) return;
@@ -370,60 +303,10 @@ function Welcome() {
           const dateB = new Date(b.updated_at || b.created_at || 0);
           return dateB - dateA;
         });
-
-        // Alguns registros chegam com t?tulo placeholder (ex.: Chat DD/MM/AAAA).
-        // Para esses casos, consulta o endpoint de conversa completa e usa o t?tulo real.
-        const placeholderChats = sortedHistory
-          .filter((chat) => {
-            const currentTitle =
-              chat?.chat_title || chat?.session_title || chat?.title || chat?.name || '';
-            return isPlaceholderHistoryTitle(currentTitle) && !!getHistoryChatId(chat);
-          })
-          .slice(0, 12);
-
-        let enrichedHistory = sortedHistory;
-        if (placeholderChats.length > 0) {
-          const resolvedTitlesById = {};
-
-          await Promise.all(
-            placeholderChats.map(async (chat) => {
-              const chatId = getHistoryChatId(chat);
-              if (!chatId) return;
-
-              try {
-                const chatData = await loadChat(chatId);
-                const endpointTitle =
-                  chatData?.chat_title ||
-                  chatData?.session_title ||
-                  chatData?.title ||
-                  chatData?.name ||
-                  '';
-
-                if (!isPlaceholderHistoryTitle(endpointTitle)) {
-                  resolvedTitlesById[chatId] = endpointTitle.trim();
-                }
-              } catch (_error) {
-                // Mant?m o item original quando o endpoint n?o retorna t?tulo v?lido.
-              }
-            })
-          );
-
-          enrichedHistory = sortedHistory.map((chat) => {
-            const chatId = getHistoryChatId(chat);
-            const resolvedTitle = chatId ? resolvedTitlesById[chatId] : null;
-            if (!resolvedTitle) return chat;
-            return {
-              ...chat,
-              title: resolvedTitle,
-              chat_title: resolvedTitle,
-              session_title: resolvedTitle,
-            };
-          });
-        }
-
-        setChatHistory(enrichedHistory);
+        
+        setChatHistory(sortedHistory);
         setHistoryLoaded(true);
-        console.log('? Hist?rico carregado e ordenado com sucesso!');
+        console.log('âœ… Histórico carregado e ordenado com sucesso!');
       } else {
         console.log('âš ï¸ Histórico retornado não é um array, usando array vazio');
         setChatHistory([]);
@@ -457,7 +340,7 @@ function Welcome() {
   };
 
   // Função para formatar tempo relativo (ex: "há 2 minutos", "há 1 hora")
-  const formatRelativeTime = (timestamp) => {
+const formatRelativeTime = (timestamp) => {
     if (!timestamp) return 'Agora';
     
     const now = new Date();
@@ -482,7 +365,16 @@ function Welcome() {
       const year = messageTime.getFullYear();
       return `${day}/${month}/${year}`;
     }
-  };
+};
+
+const normalizeMessageForDisplay = (value) => {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/\n\s*\n+/g, '\n')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
 
   // Removido: carregamento de chats deletados do localStorage
 
@@ -548,31 +440,19 @@ function Welcome() {
     }
   }, [isHistoryOpen]);
 
-  // Função para gerar título correto (igual ao histórico)
+  // Sempre prioriza o título vindo do backend.
   const generateCorrectTitle = (chat) => {
-    const titleCandidates = [
-      chat?.chat_title,
-      chat?.session_title,
-      chat?.title,
-      chat?.name,
-    ];
-
-    const normalizedTitle = titleCandidates
-      .find((value) => typeof value === 'string' && value.trim())
-      ?.trim();
-
-    if (normalizedTitle) {
-      const titleKey = normalizedTitle
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '');
-
-      if (titleKey !== 'chat sem titulo' && !/^chat \d{2}\/\d{2}\/\d{4}$/i.test(normalizedTitle)) {
-        return normalizedTitle;
-      }
+    const backendTitle = chat?.title;
+    if (typeof backendTitle === 'string' && backendTitle.trim()) {
+      return backendTitle.trim();
     }
+    return 'Sem titulo';
+  };
 
-    return 'Chat sem t?tulo';
+  const getChatIdentifier = (chat) => {
+    if (!chat) return null;
+    // Prioriza o identificador de sessão (UUID) vindo do backend.
+    return chat.session_id || chat.chat_id || chat.id || null;
   };
 
   const extractMessagesFromChatData = (chatData, fallbackChat) => {
@@ -622,53 +502,43 @@ function Welcome() {
     return value;
   };
 
-  const formatMessagesForUI = (messagesToLoad) => {
-    const normalizeMediaEntries = (payload) => {
-      if (!payload) return [];
+  const getTargetPage = (doc) => {
+    const direct = Number(doc?.target_page ?? doc?.targetPage);
+    if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
 
-      const candidates = Array.isArray(payload) ? payload : [payload];
-      const collected = [];
+    const pagesValue = String(doc?.pages || '');
+    const firstMatch = pagesValue.match(/\d+/);
+    if (firstMatch) return Number(firstMatch[0]);
 
-      const pushImage = (image) => {
-        const url = normalizeMediaUrl(image?.Link || image?.link || image?.url || image?.href);
-        if (!url) return;
-        collected.push({
-          type: 'image',
-          url,
-          alt: image?.name || image?.title || image?.alt || 'Imagem',
-        });
-      };
+    const linkValue = String(doc?.Link || doc?.link || '');
+    const pageParam = linkValue.match(/[?&]page=(\d+)/i);
+    if (pageParam) return Number(pageParam[1]);
 
-      const pushVideo = (video) => {
-        const url = normalizeMediaUrl(video?.Link || video?.link || video?.url || video?.href);
-        if (!url) return;
-        collected.push({
-          type: 'video',
-          url,
-          title: video?.name || video?.title || 'Vídeo',
-          source: video?.source,
-        });
-      };
+    return 1;
+  };
 
-      candidates.forEach((candidate) => {
-        if (!candidate) return;
-        if (Array.isArray(candidate.images)) candidate.images.forEach(pushImage);
-        if (Array.isArray(candidate.Images)) candidate.Images.forEach(pushImage);
-        if (Array.isArray(candidate.videos)) candidate.videos.forEach(pushVideo);
-        if (Array.isArray(candidate.Videos)) candidate.Videos.forEach(pushVideo);
+  const getContentSourceId = (doc) => {
+    if (doc?.id !== undefined && doc?.id !== null) return String(doc.id);
+    const linkValue = String(doc?.Link || doc?.link || '');
+    const contentMatch = linkValue.match(/\/viewer\/([^/?#]+)/i);
+    if (contentMatch?.[1]) return contentMatch[1];
+    return null;
+  };
 
-        if (Array.isArray(candidate.media)) {
-          candidate.media.forEach((entry) => {
-            const type = String(entry?.type || '').toLowerCase();
-            if (type === 'image') pushImage(entry);
-            if (type === 'video') pushVideo(entry);
-          });
-        }
-      });
-
-      return collected;
+  const normalizeReference = (ref) => {
+    const contentSourceId = getContentSourceId(ref) || ref?.contentSourceId || ref?.content_source_id || null;
+    return {
+      ...ref,
+      id: ref?.id || contentSourceId,
+      contentSourceId,
+      source: ref?.source || ref?.name || ref?.title || ref?.id || 'Fonte',
+      page: ref?.page || ref?.pages,
+      targetPage: getTargetPage(ref),
+      link: normalizeMediaUrl(ref?.link || ref?.Link || ref?.url),
     };
+  };
 
+  const formatMessagesForUI = (messagesToLoad) => {
     return messagesToLoad.map((msg, index) => {
       let messageType = 'ai';
       if (msg.type) {
@@ -689,26 +559,36 @@ function Welcome() {
         msg.media_payload || msg.mediaPayload || msg.media_payloads || msg.mediaPayloads || msg.media
       );
 
-      let references = Array.isArray(msg.references) ? msg.references : null;
+      let references = Array.isArray(msg.references) ? msg.references.map(normalizeReference) : null;
       if (!references && sourcesPayload && Array.isArray(sourcesPayload.documents)) {
-        references = sourcesPayload.documents.map(doc => ({
-          source: doc.name || doc.id,
-          page: doc.pages,
-          link: normalizeMediaUrl(doc.Link || doc.link)
-        }));
+        references = sourcesPayload.documents.map(normalizeReference);
       }
 
-      let media = normalizeMediaEntries(msg.media);
-      if (media.length === 0 && mediaPayload) {
-        media = normalizeMediaEntries([
-          mediaPayload,
-          mediaPayload?.payload,
-          mediaPayload?.data,
-          mediaPayload?.resources,
-        ]);
-      }
-      if (media.length === 0) {
-        media = null;
+      let media = Array.isArray(msg.media) ? msg.media : null;
+      if (!media && mediaPayload) {
+        const collected = [];
+        if (Array.isArray(mediaPayload.videos)) {
+          mediaPayload.videos.forEach((video) => {
+            collected.push({
+              type: 'video',
+              title: video.name || video.title,
+              url: normalizeMediaUrl(video.Link || video.link || video.url),
+              source: video.source
+            });
+          });
+        }
+        if (Array.isArray(mediaPayload.images)) {
+          mediaPayload.images.forEach((image) => {
+            collected.push({
+              type: 'image',
+              url: normalizeMediaUrl(image.Link || image.link || image.url),
+              alt: image.name || image.title
+            });
+          });
+        }
+        if (collected.length > 0) {
+          media = collected;
+        }
       }
 
       return {
@@ -725,15 +605,56 @@ function Welcome() {
   };
 
   // Função para salvar conversa automaticamente
+  const saveCurrentChat = async () => {
+    try {
+      // Só salva se tiver mensagens além da mensagem de boas-vindas
+      const userMessages = messages.filter(msg => msg.type === 'user');
+      if (userMessages.length === 0) return;
+
+      const chatData = {
+        session_id: sessionId,
+        title: chatTitle, // âœ… Sempre usa o título atual (padrão ou editado)
+        messages: messages.filter(msg => !msg.isWelcome), // Remove mensagem de boas-vindas
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      console.log('ðŸ’¾ Salvando conversa automaticamente:', chatData);
+      console.log('ðŸ“ Título sendo salvo:', chatTitle);
+      
+      const result = await saveChat(chatData);
+      
+      // Verifica se salvou com sucesso (não retornou ok: false)
+      if (result && result.ok === false) {
+        console.log('âš ï¸ Salvamento não disponível (endpoint não implementado)');
+      } else if (result) {
+        console.log('âœ… Conversa salva com sucesso!');
+        // Força recarregamento do histórico na próxima abertura
+        setHistoryLoaded(false);
+      }
+    } catch (error) {
+      console.warn('âš ï¸ Não foi possível salvar conversa:', error.message);
+      // Não é crítico, continua funcionando normalmente
+    }
+  };
+
+  // Salvar conversa automaticamente quando há mudanças nas mensagens
+  useEffect(() => {
+    // Debounce: salva 2 segundos após a última mudança
+    const timeoutId = setTimeout(() => {
+      if (messages.length > 1) { // Só salva se tiver mais que a mensagem de boas-vindas
+        saveCurrentChat();
+      }
+    }, 2000);
+
+    return () => clearTimeout(timeoutId);
+  }, [messages, chatTitle, sessionId]);
+
+
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (message.trim() && !isLoading) {
-      if (currentChatId && !acquireWriterLock(currentChatId)) {
-        window.alert('Esta conversa está ativa em outra janela. Volte para essa janela para continuar.');
-        return;
-      }
-
       const userMessageText = message.trim();
       const userMsgId = `user-msg-${Date.now()}`;
       
@@ -747,7 +668,6 @@ function Welcome() {
       };
       setMessages(prev => [...prev, userMessage]);
       setMessage('');
-      scrollToBottomSoon();
       
       setIsLoading(true);
       
@@ -765,13 +685,11 @@ function Welcome() {
         isStreaming: true
       };
       setMessages(prev => [...prev, initialAiMessage]);
-      scrollToBottomSoon();
       
       try {
         let currentSessionId = sessionId;
         let aiResponse = null;
         let streamUrl = null;
-        let responseTitle = null;
         
         // Se é a primeira mensagem (apenas mensagem de boas-vindas), inicia nova conversa
         if (messages.length === 1) {
@@ -785,24 +703,33 @@ function Welcome() {
             console.log('ðŸ”— Stream URL fornecida pelo backend:', chatResponse.stream_url);
             streamUrl = chatResponse.stream_url;
           }
+
+          // Usa o título retornado pelo /chat no início da conversa.
+          if (!pendingTitleRename) {
+            const backendTitle = generateCorrectTitle(chatResponse);
+            if (backendTitle) {
+              setChatTitle(backendTitle);
+            }
+          }
           
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
           try {
-            localStorage.setItem('activeChatIdConfirmed', currentSessionId);
+            localStorage.setItem('activeChatId', currentSessionId);
           } catch (_error) {
             // noop
           }
-          postChatRouteUpdateToParent(currentSessionId);
-
-          const backendTitle =
-            chatResponse.title ||
-            chatResponse.chat_title ||
-            chatResponse.session_title;
-          responseTitle = backendTitle || null;
-          if (!pendingTitleRename && backendTitle) {
-            setChatTitle(backendTitle);
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(
+                { type: 'senai_active_chat', chatId: currentSessionId },
+                MOODLE_PARENT_ORIGIN
+              );
+            }
+          } catch (_error) {
+            // noop
           }
+          saveActiveChatState(currentSessionId, false);
 
           if (pendingTitleRename && chatTitle) {
             try {
@@ -825,11 +752,6 @@ function Welcome() {
           console.log('ðŸ’¬ Enviando mensagem na conversa:', currentSessionId);
           const messageResponse = await sendChatMessage(currentSessionId, userMessageText);
           aiResponse = messageResponse.response || messageResponse.message || messageResponse.answer || messageResponse.text;
-          responseTitle =
-            messageResponse.title ||
-            messageResponse.chat_title ||
-            messageResponse.session_title ||
-            null;
           
           // Pega o stream_url se disponível
           if (messageResponse.stream_url) {
@@ -838,16 +760,6 @@ function Welcome() {
           }
           
           console.log('ðŸ“ Resposta da IA:', aiResponse);
-        }
-
-        if (responseTitle) {
-          setChatHistory(prevHistory =>
-            prevHistory.map(chat => {
-              const chatId = chat.id || chat.session_id || chat.chat_id;
-              if (chatId !== currentSessionId) return chat;
-              return { ...chat, title: responseTitle };
-            })
-          );
         }
         
         // Se temos resposta direta, usa ela
@@ -860,7 +772,6 @@ function Welcome() {
                 : msg
             )
           );
-          scrollToBottomSoon();
           setIsLoading(false);
           
           // âœ… Atualiza o histórico
@@ -885,15 +796,11 @@ function Welcome() {
               }
 
               if (meta?.sources) {
-                const references = meta.sources.map(doc => ({
-                  source: doc.name || doc.id,
-                  page: doc.pages,
-                  link: doc.Link || doc.link
-                }));
+                const references = meta.sources.map(normalizeReference);
                 setMessages(prev =>
                   prev.map(msg =>
                     msg.id === aiMessageId
-                      ? { ...msg, references }
+                      ? { ...msg, pendingReferences: references }
                       : msg
                   )
                 );
@@ -907,18 +814,22 @@ function Welcome() {
                     : msg
                 )
               );
-              scrollToBottomSoon();
             },
             // onComplete - finaliza o streaming
             (finalText) => {
               setMessages(prev => 
                 prev.map(msg => 
                   msg.id === aiMessageId 
-                    ? { ...msg, text: finalText, isStreaming: false }
+                    ? {
+                        ...msg,
+                        text: finalText,
+                        isStreaming: false,
+                        references: msg.pendingReferences || msg.references,
+                        pendingReferences: undefined
+                      }
                     : msg
                 )
               );
-              scrollToBottomSoon();
               setIsLoading(false);
               
               // âœ… Atualiza o histórico
@@ -1068,9 +979,9 @@ Status: Erro 500 - Problema interno do servidor`;
         '',
         'Estou aqui para facilitar sua jornada.',
         '',
-        'Você pode me perguntar sobre qualquer conteúdo do seu curso: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é oferecer as melhores respostas com base no material do seu curso.',
+        'Você pode me perguntar sobre qualquer conteúdo do seu curso: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é te dar as melhores respostas sobre o conteúdo do seu curso.',
         '',
-        'Estou limitada ao nosso conteúdo interno e não posso responder outras dúvidas, como, por exemplo, ensinar a fazer um bolo.',
+        'Estou limitada nosso conteúdo interno. Não posso responder outras dúvidas, como por exemplo, fazer um bolo.',
         '',
         'Pode contar comigo para tornar o aprendizado mais leve, claro e acessível.',
         '',
@@ -1163,12 +1074,10 @@ Status: Erro 500 - Problema interno do servidor`;
 
   // Função para deletar conversa do histórico
   const handleDeleteChat = async (chat) => {
-    const chatId = chat.id || chat.session_id || chat.chat_id;
+    const chatId = getChatIdentifier(chat);
 
     // Remove da lista local imediatamente
-    setChatHistory(prev => prev.filter(c => 
-      (c.id || c.session_id || c.chat_id) !== chatId
-    ));
+    setChatHistory(prev => prev.filter(c => getChatIdentifier(c) !== chatId));
     
     // Se a conversa deletada é a atual, limpa o chat
     if (currentChatId === chatId || sessionId === chatId) {
@@ -1193,15 +1102,10 @@ Status: Erro 500 - Problema interno do servidor`;
     
     try {
       // Define o ID do chat atual
-      const chatId = chat.id || chat.session_id || chat.chat_id;
+      const chatId = getChatIdentifier(chat);
       setCurrentChatId(chatId);
       setSessionId(chatId);
-      try {
-        localStorage.setItem('activeChatIdConfirmed', chatId);
-      } catch (_error) {
-        // noop
-      }
-      postChatRouteUpdateToParent(chatId);
+      saveActiveChatState(chatId, false);
       
       // Atualiza o título usando a mesma lógica do histórico
       setChatTitle(generateCorrectTitle(chat));
@@ -1210,10 +1114,10 @@ Status: Erro 500 - Problema interno do servidor`;
       console.log('ðŸ“¡ Buscando conversa completa da API:', chatId);
         const chatData = await loadChat(chatId);
         
-        if (!chatData) {
-          console.log('âš ï¸ Conversa não encontrada no backend, iniciando nova.');
-          localStorage.removeItem('activeChatId');
-          setMessages([
+          if (!chatData) {
+            console.log('âš ï¸ Conversa não encontrada no backend, iniciando nova.');
+            clearActiveChatState();
+            setMessages([
             {
               id: 1,
               type: 'ai',
@@ -1259,14 +1163,9 @@ Status: Erro 500 - Problema interno do servidor`;
       console.error('âŒ Erro ao carregar conversa:', error);
       
       // Fallback: usar dados básicos do histórico
-      const chatId = chat.id || chat.session_id || chat.chat_id;
+      const chatId = getChatIdentifier(chat);
       setCurrentChatId(chatId);
       setSessionId(chatId);
-      try {
-        localStorage.setItem('activeChatIdConfirmed', chatId);
-      } catch (_error) {
-        // noop
-      }
       setChatTitle(generateCorrectTitle(chat));
       
       // Mensagem padrão em caso de erro
@@ -1293,74 +1192,57 @@ Status: Erro 500 - Problema interno do servidor`;
   useEffect(() => {
     let ignore = false;
     const restoreActiveChat = async () => {
-      let shouldTryDraftRestore = false;
-      try {
-        shouldTryDraftRestore = sessionStorage.getItem(RESTORE_DRAFT_ON_RELOAD_KEY) === '1';
-      } catch (_error) {
-        shouldTryDraftRestore = false;
-      }
-
-      if (shouldTryDraftRestore) {
-        try {
-          const rawDraft = sessionStorage.getItem(DRAFT_CHAT_STATE_KEY);
-          const draft = rawDraft ? JSON.parse(rawDraft) : null;
-          if (draft && Array.isArray(draft.messages) && draft.messages.some((m) => m?.type === 'user')) {
-            const restoredSessionId = draft.sessionId || generateUUID();
-            setSessionId(restoredSessionId);
-            setCurrentChatId(null);
-            setChatTitle(draft.chatTitle || 'Chat sem título');
-            setMessages(draft.messages);
-            setFeedbackGiven({});
-            setCopiedMessages({});
-            localStorage.setItem('activeChatId', restoredSessionId);
-            sessionStorage.removeItem(RESTORE_DRAFT_ON_RELOAD_KEY);
-            return;
-          }
-        } catch (error) {
-          console.warn('Falha ao restaurar rascunho do chat:', error);
-        }
-      }
-
       let storedChatId = null;
-      let hasSessionIdParam = false;
-      let shouldClearRestoreKey = false;
-      try {
-        const restoreChatId = sessionStorage.getItem(RESTORE_CHAT_ON_RELOAD_KEY);
-        if (restoreChatId) {
-          storedChatId = restoreChatId;
-          shouldClearRestoreKey = true;
-        }
-      } catch (error) {
-        console.warn('Falha ao ler chat pendente de restauracao:', error);
-      }
+      let storedChatIsDraft = false;
+      let localActiveChatId = null;
         try {
-          const sessionIdFromUrl = pickChatIdFromSearch(window.location.search);
-          hasSessionIdParam = !!sessionIdFromUrl;
-          if (sessionIdFromUrl) {
-            storedChatId = sessionIdFromUrl;
-          }
-          if (storedChatId) {
-            localStorage.setItem(ACTIVE_CHAT_ID_KEY, storedChatId);
-          }
-        } catch (error) {
-          console.warn('Falha ao ler session_id da URL:', error);
-        }
+          const urlParams = new URLSearchParams(window.location.search);
+          const isEmbedded = window.parent && window.parent !== window;
+          const explicitChatIdFromUrl =
+            urlParams.get('active_chat_id') ||
+            urlParams.get('chat_id') ||
+            urlParams.get('session_id');
+          const explicitDraftFromUrl = urlParams.get('active_chat_draft') === '1';
 
-      try {
-        if (!storedChatId && hasSessionIdParam) {
-          const pendingExpandChatId =
-            !(window.parent && window.parent !== window)
-              ? localStorage.getItem(PENDING_EXPAND_CHAT_ID_KEY)
-              : null;
-          storedChatId =
-            pendingExpandChatId ||
-            localStorage.getItem('activeChatIdConfirmed') ||
-            localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+          localActiveChatId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+          // Apenas a tela expandida deve consumir o pendingExpandChatId.
+          // No iframe, manter esse valor evita perder o chat correto ao clicar em expandir.
+          const pendingExpandChatId = !isEmbedded
+            ? localStorage.getItem(PENDING_EXPAND_CHAT_ID_KEY)
+            : null;
+          const pendingExpandIsDraft = !isEmbedded &&
+            localStorage.getItem(PENDING_EXPAND_CHAT_DRAFT_KEY) === '1';
+          storedChatIsDraft = localStorage.getItem(ACTIVE_CHAT_DRAFT_KEY) === '1';
+
+          // Prioridade:
+          // 1) pendingExpandChatId (último chat escolhido no iframe para expandir)
+          // 2) active_chat_id/chat_id/session_id explícitos na URL do expandido
+          // 3) activeChatId local (fallback)
+          // Não usamos mais sid/session_id legado para evitar restaurar chat antigo por engano.
+          storedChatId = pendingExpandChatId || explicitChatIdFromUrl || localActiveChatId;
           if (pendingExpandChatId) {
+            storedChatIsDraft = pendingExpandIsDraft;
             localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
             localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
           }
+
+          if (!localActiveChatId && explicitChatIdFromUrl) {
+            storedChatIsDraft = explicitDraftFromUrl;
+          }
+
+          if (storedChatId && storedChatId !== localActiveChatId) {
+            saveActiveChatState(storedChatId, false);
+            storedChatIsDraft = false;
+          } else if (storedChatId && !explicitChatIdFromUrl) {
+            // Garante que a URL do chat expandido reflita o chat ativo restaurado.
+            syncActiveChatInUrl(storedChatId, storedChatIsDraft);
+          }
+        } catch (error) {
+          console.warn('Falha ao ler active_chat_id da URL:', error);
         }
+
+      try {
+        if (!storedChatId) storedChatId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
       } catch (error) {
         console.warn('Falha ao ler activeChatId do localStorage:', error);
         return;
@@ -1369,6 +1251,26 @@ Status: Erro 500 - Problema interno do servidor`;
       if (!storedChatId) return;
       if (storedChatId === currentChatId || storedChatId === sessionId) return;
 
+      if (storedChatIsDraft) {
+        console.log('Restaurando chat novo vazio (rascunho).');
+        setCurrentChatId(null);
+        setSessionId(storedChatId);
+        setChatTitle('');
+        setMessages([
+          {
+            id: 1,
+            type: 'ai',
+            text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+            isWelcome: true,
+            timestamp: new Date(),
+            messageId: 'welcome-msg'
+          }
+        ]);
+        setFeedbackGiven({});
+        setCopiedMessages({});
+        return;
+      }
+
       try {
         console.log('Tentando restaurar chat ativo do storage:', storedChatId);
         const history = await getChatHistory();
@@ -1376,15 +1278,12 @@ Status: Erro 500 - Problema interno do servidor`;
 
         if (Array.isArray(history)) {
           const match = history.find((chat) => {
-            const chatId = chat.id || chat.session_id || chat.chat_id;
+            const chatId = getChatIdentifier(chat);
             return chatId === storedChatId;
           });
 
           if (match) {
             await handleLoadChat(match);
-            if (shouldClearRestoreKey) {
-              sessionStorage.removeItem(RESTORE_CHAT_ON_RELOAD_KEY);
-            }
             return;
           }
         }
@@ -1395,21 +1294,13 @@ Status: Erro 500 - Problema interno do servidor`;
 
           if (!chatData) {
             console.log('Chat inexistente no backend, limpando activeChatId.');
-            localStorage.removeItem('activeChatId');
-            if (shouldClearRestoreKey) {
-              sessionStorage.removeItem(RESTORE_CHAT_ON_RELOAD_KEY);
-            }
+            clearActiveChatState();
             return;
           }
 
           const messagesToLoad = extractMessagesFromChatData(chatData, null);
         setCurrentChatId(storedChatId);
         setSessionId(storedChatId);
-        try {
-          localStorage.setItem('activeChatIdConfirmed', storedChatId);
-        } catch (_error) {
-          // noop
-        }
         setChatTitle(generateCorrectTitle(chatData));
 
         if (messagesToLoad.length > 0) {
@@ -1429,9 +1320,6 @@ Status: Erro 500 - Problema interno do servidor`;
 
         setFeedbackGiven({});
         setCopiedMessages({});
-        if (shouldClearRestoreKey) {
-          sessionStorage.removeItem(RESTORE_CHAT_ON_RELOAD_KEY);
-        }
       } catch (error) {
         console.error('Erro ao restaurar chat ativo:', error);
       }
@@ -1441,7 +1329,7 @@ Status: Erro 500 - Problema interno do servidor`;
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [location.pathname, location.search]);
 
   const handleNewChat = () => {
     // A nova API salva automaticamente, então só precisamos limpar a interface
@@ -1451,15 +1339,9 @@ Status: Erro 500 - Problema interno do servidor`;
     const newSessionId = generateUUID();
     setSessionId(newSessionId);
     setCurrentChatId(null);
-    postChatRouteClearToParent();
 
     // Atualiza imediatamente o chat ativo para o widget maximizado abrir limpo
-    try {
-      localStorage.setItem(ACTIVE_CHAT_ID_KEY, newSessionId);
-      localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, '1');
-    } catch (error) {
-      console.warn('Falha ao salvar novo activeChatId no localStorage:', error);
-    }
+    saveActiveChatState(newSessionId, true);
 
     // Reseta as mensagens para o estado inicial
     setMessages([
@@ -1477,52 +1359,13 @@ Status: Erro 500 - Problema interno do servidor`;
     setFeedbackGiven({});
     setCopiedMessages({});
     
-    // Novo chat começa sem título até o backend retornar o título após a primeira mensagem
-    setChatTitle('Chat sem título');
+    // Novo chat sem título sintético: aguarda título vindo do backend em /chat.
+    setChatTitle('');
     
     // Força reload do histórico na próxima abertura
     setHistoryLoaded(false);
     
     console.log('âœ… Nova conversa iniciada!');
-  };
-
-  const handleResumeExpandedChatHere = async () => {
-    const activeId = currentChatId || sessionId;
-    if (!activeId) {
-      window.alert('Nenhuma conversa ativa para recarregar.');
-      return;
-    }
-
-    setIsRefreshingHistory(true);
-    try {
-      const existingChat = Array.isArray(chatHistory)
-        ? chatHistory.find((chat) => (chat.id || chat.session_id || chat.chat_id) === activeId)
-        : null;
-
-      await handleLoadChat(
-        existingChat || {
-          id: activeId,
-          session_id: activeId,
-          title: chatTitle,
-          updated_at: new Date().toISOString(),
-        }
-      );
-
-      setIsExpandedOverlayOpen(false);
-      requestAnimationFrame(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      });
-    } catch (error) {
-      console.error('Erro ao retomar conversa expandida:', error);
-      window.alert('N?o foi poss?vel recarregar a conversa. Tente novamente.');
-    } finally {
-      setIsRefreshingHistory(false);
-    }
-  };
-
-  const handleStartNewChatFromExpandedOverlay = () => {
-    setIsExpandedOverlayOpen(false);
-    handleNewChat();
   };
 
   const handleTitleEdit = () => {
@@ -1531,86 +1374,14 @@ Status: Erro 500 - Problema interno do servidor`;
 
   useEffect(() => {
     const hasUserMessages = messages.some((msg) => msg.type === 'user');
-    if (!hasUserMessages) return;
-
     const activeChatId = currentChatId || sessionId;
     if (!activeChatId) return;
+    // Evita sobrescrever o chat ativo salvo ao abrir a tela expandida:
+    // no primeiro render ainda não restauramos o chat real e o sessionId é temporário.
+    if (!currentChatId && !hasUserMessages) return;
 
-    try {
-      localStorage.setItem(ACTIVE_CHAT_ID_KEY, activeChatId);
-      const hasUserMessages = messages.some((msg) => msg.type === 'user');
-      localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, hasUserMessages ? '0' : '1');
-      if (currentChatId) {
-        localStorage.setItem('activeChatIdConfirmed', currentChatId);
-      }
-    } catch (error) {
-      console.warn('Falha ao salvar activeChatId no localStorage:', error);
-    }
-
+    saveActiveChatState(activeChatId, !hasUserMessages);
   }, [messages, currentChatId, sessionId]);
-
-  useEffect(() => {
-    try {
-      const hasUserMessages = messages.some((msg) => msg.type === 'user');
-      if (!hasUserMessages) {
-        sessionStorage.removeItem(DRAFT_CHAT_STATE_KEY);
-        return;
-      }
-
-      if (currentChatId) {
-        sessionStorage.removeItem(DRAFT_CHAT_STATE_KEY);
-        return;
-      }
-
-      const draftPayload = {
-        sessionId,
-        chatTitle,
-        messages,
-        savedAt: new Date().toISOString(),
-      };
-      sessionStorage.setItem(DRAFT_CHAT_STATE_KEY, JSON.stringify(draftPayload));
-    } catch (_error) {
-      // noop
-    }
-  }, [messages, sessionId, currentChatId, chatTitle]);
-
-  useEffect(() => {
-    if (!currentChatId) return;
-
-    const syncFromBackend = async () => {
-      try {
-        const chatData = await loadChat(currentChatId);
-        if (!chatData) return;
-        const messagesToLoad = extractMessagesFromChatData(chatData, null);
-        if (messagesToLoad.length > 0) {
-          setMessages(formatMessagesForUI(messagesToLoad));
-        }
-        const nextTitle = generateCorrectTitle(chatData);
-        if (nextTitle) {
-          setChatTitle(nextTitle);
-        }
-      } catch (_error) {
-        // noop
-      }
-    };
-
-    const onVisibilityChange = () => {
-      if (!document.hidden) {
-        syncFromBackend();
-      }
-    };
-
-    const onFocus = () => {
-      syncFromBackend();
-    };
-
-    window.addEventListener('focus', onFocus);
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => {
-      window.removeEventListener('focus', onFocus);
-      document.removeEventListener('visibilitychange', onVisibilityChange);
-    };
-  }, [currentChatId]);
 
   const handleTitleChange = (e) => {
     setChatTitle(e.target.value);
@@ -1669,6 +1440,20 @@ Status: Erro 500 - Problema interno do servidor`;
   };
 
   const handleConfirmLogout = () => {
+    if (!moodleUser?.fromMoodle) {
+      clearToken();
+      clearMoodleUser();
+      try {
+        sessionStorage.removeItem('moodle_token');
+        localStorage.removeItem('moodle_token');
+      } catch (_error) {
+        // noop
+      }
+      setIsLogoutModalOpen(false);
+      window.location.reload();
+      return;
+    }
+
     const moodleUrl = getMoodleReturnUrl();
     setIsLogoutModalOpen(false);
     window.location.href = moodleUrl;
@@ -1712,7 +1497,7 @@ Status: Erro 500 - Problema interno do servidor`;
                   style={{ width: '180px' }}
                 />
               ) : (
-                <span className="text-sm font-medium">{chatTitle}</span>
+                <span className="text-sm font-medium">{displayChatTitle}</span>
               )}
             </div>
             
@@ -1740,17 +1525,7 @@ Status: Erro 500 - Problema interno do servidor`;
                   style={{ width: '140px' }}
                 />
               ) : (
-                <span
-                  className="text-xs font-medium"
-                  style={{
-                    maxWidth: '150px',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis'
-                  }}
-                >
-                  {chatTitle}
-                </span>
+                <span className="text-xs font-medium">{displayChatTitle}</span>
               )}
             </button>
           </div>
@@ -1827,11 +1602,7 @@ Status: Erro 500 - Problema interno do servidor`;
       </header>
 
       {/* Main Content - Scrollable */}
-      <main
-        ref={mainScrollRef}
-        onScroll={handleScrollMain}
-        className="flex-1 min-h-0 overflow-y-auto"
-      >
+      <main className="flex-1 min-h-0 overflow-y-auto">
         <div className="max-w-[900px] mx-auto px-3 md:px-6 w-full py-6 md:py-12">
           {/* Logo and Welcome */}
           <div className="text-center mb-8 md:mb-16">
@@ -1851,39 +1622,41 @@ Status: Erro 500 - Problema interno do servidor`;
             <div className="flex flex-col items-center gap-4 px-4">
               {/* Card 1 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl text-left flex flex-col w-full max-w-[640px] overflow-hidden"
+                className="bg-[#FFFFFF] rounded-2xl text-center items-center flex flex-col w-full max-w-[640px] overflow-hidden"
                 style={{ 
                   minHeight: '178px', 
                   padding: '16px',
                   boxShadow: '0px 0px 12px 0px #C3E9FC80'
                 }}
               >
-                <div 
-                  className="bg-[#FFEFEA] flex items-center justify-center mb-3" 
-                  style={{ 
-                    width: '40px', 
-                    height: '40px',
-                    borderRadius: '8px',
-                    padding: '4px',
-                    opacity: 1
-                  }}
-                >
-                  <img src={questionIcon} alt="Question" className="w-6 h-6" />
+                <div className="flex items-center justify-center gap-3 mb-2 w-full">
+                  <div
+                    className="bg-[#FFEFEA] flex items-center justify-center"
+                    style={{
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '8px',
+                      padding: '4px',
+                      opacity: 1
+                    }}
+                  >
+                    <img src={questionIcon} alt="Question" className="w-6 h-6" />
+                  </div>
+                  <h3
+                    className="text-[#2D2D2D]"
+                    style={{
+                      fontFamily: 'Inter, sans-serif',
+                      fontWeight: 700,
+                      fontSize: '14px',
+                      lineHeight: '100%',
+                      letterSpacing: '0.1px'
+                    }}
+                  >
+                    Quero ajudar você a tirar suas dúvidas
+                  </h3>
                 </div>
-                <h3 
-                  className="text-[#2D2D2D] mb-2"
-                  style={{ 
-                    fontFamily: 'Inter, sans-serif',
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    lineHeight: '100%',
-                    letterSpacing: '0.1px'
-                  }}
-                >
-                  Quero ajudar você a tirar suas dúvidas
-                </h3>
                 <p 
-                  className="text-[#BDBDBD] break-words"
+                  className="text-[#BDBDBD] break-words text-center"
                   style={{ 
                     fontFamily: 'Inter, sans-serif',
                     fontWeight: 400,
@@ -1898,7 +1671,7 @@ Status: Erro 500 - Problema interno do servidor`;
 
               {/* Card 2 */}
               <div 
-                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-left flex flex-col w-full max-w-[640px] hover:bg-[#FFEFEA]"
+                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-center items-center flex flex-col w-full max-w-[640px] hover:bg-[#FFEFEA]"
                 style={{ 
                   height: 'fit-content', 
                   padding: '16px',
@@ -1906,7 +1679,7 @@ Status: Erro 500 - Problema interno do servidor`;
                 }}
                 onClick={() => setIsHistoryOpen(true)}
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center justify-center gap-3 w-full">
                   <div 
                     className="bg-[#FFEFEA] flex items-center justify-center" 
                     style={{ 
@@ -1967,7 +1740,9 @@ Status: Erro 500 - Problema interno do servidor`;
                           <span className="text-gray-400 text-sm"> · {formatRelativeTime(msg.timestamp)}</span>
                         </div>
                         
-                        <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                        <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-line break-words">
+                          {normalizeMessageForDisplay(msg.text)}
+                        </p>
                         
                         {/* Footer com botão copiar */}
                         <div className="flex items-center justify-end mt-4">
@@ -2005,9 +1780,9 @@ Status: Erro 500 - Problema interno do servidor`;
                             <p className="font-bold mb-4">{msg.text}</p>
                             <p className="mb-4">Estou aqui para facilitar sua jornada.</p>
                             <p className="mb-4">
-                              Você pode me perguntar sobre qualquer <span style={{ color: '#E84910', fontWeight: 600 }}>conteúdo do seu curso</span>: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é oferecer as melhores respostas com <span style={{ color: '#E84910', fontWeight: 600 }}>base no material do seu curso</span>.
+                              Você pode me perguntar sobre qualquer <span style={{ color: '#E84910', fontWeight: 600 }}>conteúdo do seu curso</span>: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é te dar as melhores respostas sobre <span style={{ color: '#E84910', fontWeight: 600 }}>o conteúdo do seu curso</span>.
                             </p>
-                            <p className="mb-4">Estou limitada ao nosso conteúdo interno e não posso responder a outras dúvidas, como, por exemplo, ensinar a fazer um bolo.</p>
+                            <p className="mb-4">Estou limitada nosso conteúdo interno. Não posso responder outras dúvidas, como por exemplo, fazer um bolo.</p>
                             <p className="mb-4">Pode contar comigo para tornar o aprendizado mais leve, claro e acessível. 😉</p>
                             <p>Vamos juntos!</p>
                           </div>
@@ -2025,10 +1800,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Dislike */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, false)}
-                                  title="Não gostei"
-                                  aria-label="Não gostei"
+                                  title="não gostei"
+                                  aria-label="não gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`transition-all ${
+                                  className={`transition-all flex items-center justify-center w-6 h-6 ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -2044,9 +1819,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                     src={dislikeIcon} 
                                     alt="Dislike" 
                                     style={{ 
-                                      width: '14.89px', 
-                                      height: '12.92px',
+                                      width: '16px', 
+                                      height: '16px',
                                       display: 'block',
+                                      objectFit: 'contain',
                                       filter: feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
                                         ? 'brightness(0) saturate(100%) invert(39%) sepia(88%) saturate(3066%) hue-rotate(9deg) brightness(97%) contrast(96%)'
                                         : 'none'
@@ -2056,10 +1832,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                 {/* Like */}
                                 <button 
                                   onClick={() => handleFeedback(msg.messageId, true)}
-                                  title="Gostei"
-                                  aria-label="Gostei"
+                                  title="gostei"
+                                  aria-label="gostei"
                                   disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
-                                  className={`transition-all ${
+                                  className={`transition-all flex items-center justify-center w-6 h-6 ${
                                     feedbackGiven[msg.messageId]?.status === 'sending' 
                                       ? 'opacity-50 cursor-not-allowed' 
                                       : 'hover:opacity-80'
@@ -2075,9 +1851,10 @@ Status: Erro 500 - Problema interno do servidor`;
                                     src={likeIcon} 
                                     alt="Like" 
                                     style={{ 
-                                      width: '14.89px', 
-                                      height: '12.92px',
+                                      width: '16px', 
+                                      height: '16px',
                                       display: 'block',
+                                      objectFit: 'contain',
                                       filter: feedbackGiven[msg.messageId]?.type === 'like' && feedbackGiven[msg.messageId]?.status === 'sent'
                                         ? 'brightness(0) saturate(100%) invert(59%) sepia(98%) saturate(1946%) hue-rotate(201deg) brightness(97%) contrast(94%)'
                                         : 'none'
@@ -2148,72 +1925,6 @@ Status: Erro 500 - Problema interno do servidor`;
         </div>
       </main>
 
-      {showScrollToBottom && messages.length > 0 && (
-        <button
-          type="button"
-          onClick={handleScrollToBottom}
-          className="fixed left-1/2 -translate-x-1/2 bottom-40 md:bottom-44 z-40 rounded-full w-8 h-8 flex items-center justify-center border border-white/30 text-white shadow-lg hover:opacity-90 transition-opacity"
-          title="Ir para o fim da conversa"
-          aria-label="Ir para o fim da conversa"
-          style={{
-            backgroundColor: 'rgba(107, 114, 128, 0.28)',
-            backdropFilter: 'blur(8px)',
-            WebkitBackdropFilter: 'blur(8px)'
-          }}
-        >
-          <svg
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
-          >
-            <path
-              d="M12 5V16"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-            />
-            <path
-              d="M7 12L12 17L17 12"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-      )}
-
-      {isExpandedOverlayOpen && (
-        <div className="fixed inset-0 z-[60] bg-black/40 flex items-center justify-center p-4">
-          <div className="w-full max-w-md rounded-xl bg-white border border-gray-200 shadow-2xl p-5">
-            <p className="text-sm text-gray-800 mb-4">
-              Esta conversa foi aberta em uma nova aba. Para continuar aqui, atualize o conteúdo.
-            </p>
-            <div className="flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={handleResumeExpandedChatHere}
-                disabled={isRefreshingHistory}
-                className="w-full rounded-lg bg-[#262626] text-white py-2.5 px-4 text-sm font-medium hover:opacity-90 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                {isRefreshingHistory ? 'Atualizando...' : 'Retomar conversa aqui'}
-              </button>
-              <button
-                type="button"
-                onClick={handleStartNewChatFromExpandedOverlay}
-                disabled={isRefreshingHistory}
-                className="w-full rounded-lg border border-gray-300 bg-white text-gray-800 py-2.5 px-4 text-sm font-medium hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                Iniciar nova conversa
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Input Area - Fixed at bottom */}
       <div className="flex-shrink-0 bg-white border-t border-gray-200 pb-4 md:pb-8">
         <div className="max-w-[900px] mx-auto px-3 md:px-6 pt-3 md:pt-4">
@@ -2240,25 +1951,24 @@ Status: Erro 500 - Problema interno do servidor`;
               ) : (
                 // Estado normal - textarea editável
                 <>
-	                  <textarea
-	                    value={message}
-	                    onChange={(e) => setMessage(e.target.value)}
+                  <textarea
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         handleSubmit(e);
                       }
                     }}
-	                    placeholder={isReadOnlyByLock ? "Conversa ativa em outra janela." : "No que posso te ajudar hoje?"}
-	                    className="w-full rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base resize-none"
-	                    style={{ height: '80px', borderColor: '#262626', padding: '12px 56px 12px 12px' }}
-	                    rows={1}
-	                    disabled={isReadOnlyByLock}
-	                  />
-	                  <button
-	                    type="submit"
-	                    disabled={isLoading || isReadOnlyByLock}
-	                    className="absolute hover:opacity-80 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center rounded-md"
+                    placeholder="No que posso te ajudar hoje?"
+                    className="w-full pr-12 md:pr-14 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base resize-none"
+                    style={{ height: '80px', borderColor: '#262626', padding: '12px' }}
+                    rows={1}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="absolute hover:opacity-80 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center rounded-md"
                     style={{ 
                       right: '12px', 
                       top: '12px',
@@ -2277,14 +1987,9 @@ Status: Erro 500 - Problema interno do servidor`;
                           : 'none'
                       }}
                     />
-	                  </button>
-	                  {isReadOnlyByLock && (
-	                    <p className="mt-1 text-xs text-amber-700">
-	                      Esta conversa está aberta em outra janela. Volte para ela para continuar.
-	                    </p>
-	                  )}
-	                </>
-	              )}
+                  </button>
+                </>
+              )}
             </form>
             
             <p className="text-center text-xs text-gray-500 px-4">

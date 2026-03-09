@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
 import * as pdfjsLib from 'pdfjs-dist';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { buildPdfContentUrl, fetchViewToken } from '../services/pdfService';
@@ -13,23 +12,13 @@ function PdfViewerPage() {
   const [numPages, setNumPages] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const { id: routeId } = useParams();
 
-  const contentSourceId = useMemo(() => {
-    if (routeId) return routeId;
-    const pathParts = window.location.pathname.split('/').filter(Boolean);
-    return pathParts[pathParts.length - 1];
-  }, [routeId]);
+  const pathParts = useMemo(() => window.location.pathname.split('/').filter(Boolean), []);
+  const contentSourceId = pathParts[pathParts.length - 1];
   const targetPage = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     const value = Number(params.get('page') || 1);
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : 1;
-  }, []);
-  const viewTokenFromHash = useMemo(() => {
-    const hash = window.location.hash?.replace(/^#/, '');
-    if (!hash) return null;
-    const params = new URLSearchParams(hash);
-    return params.get('token');
   }, []);
 
   useEffect(() => {
@@ -59,7 +48,7 @@ function PdfViewerPage() {
       setLoading(true);
       setError('');
       try {
-        const viewToken = viewTokenFromHash || await fetchViewToken(contentSourceId);
+        const viewToken = await fetchViewToken(contentSourceId);
         const pdfUrl = buildPdfContentUrl(contentSourceId);
 
         const doc = await pdfjsLib.getDocument({
@@ -85,7 +74,7 @@ function PdfViewerPage() {
     return () => {
       cancelled = true;
     };
-  }, [contentSourceId, targetPage, viewTokenFromHash]);
+  }, [contentSourceId, targetPage]);
 
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
