@@ -6,6 +6,7 @@ import { clearMoodleUser, getMoodleUser } from '../services/moodleAuthService';
 import { clearToken } from '../services/tokenStore';
 import AIMessageContent from '../components/AIMessageContent';
 import HistorySidebar from '../components/HistorySidebar';
+import useMoodleBridge from '../hooks/useMoodleBridge';
 import historicoIcon from '../assets/historico.png';
 import questionIcon from '../assets/question.png';
 import fiergsSenaiLogo from '../assets/senai.png';
@@ -68,6 +69,11 @@ function Welcome() {
   const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
   const latestActiveChatRef = useRef(null);
   const latestIsDraftRef = useRef(false);
+
+  useMoodleBridge({
+    moodleOrigin: import.meta.env.VITE_MOODLE_ORIGIN || MOODLE_PARENT_ORIGIN,
+    onChatExpanded: () => setIsExpandedOverlayOpen(true),
+  });
 
   const buildExpandedChatParams = (chatId, isDraft = false) => {
     const params = new URLSearchParams();
@@ -204,15 +210,6 @@ function Welcome() {
 
     window.addEventListener('message', handleParentExpandSync);
     return () => window.removeEventListener('message', handleParentExpandSync);
-  }, []);
-
-  useEffect(() => {
-    const handleChatExpanded = () => {
-      setIsExpandedOverlayOpen(true);
-    };
-
-    window.addEventListener('senai_chat_expanded', handleChatExpanded);
-    return () => window.removeEventListener('senai_chat_expanded', handleChatExpanded);
   }, []);
 
   // Scroll automático para o final quando novas mensagens chegam
@@ -1444,33 +1441,23 @@ Status: Erro 500 - Problema interno do servidor`;
 
     setIsRefreshingHistory(true);
     try {
-      const chatData = await loadChat(activeId);
-      if (!chatData) {
-        throw new Error('Conversa não encontrada');
-      }
+      const existingChat = Array.isArray(chatHistory)
+        ? chatHistory.find((chat) => (chat.id || chat.session_id || chat.chat_id) === activeId)
+        : null;
 
-      const messagesToLoad = extractMessagesFromChatData(chatData, null);
-      setCurrentChatId(activeId);
-      setSessionId(activeId);
-      setChatTitle(generateCorrectTitle(chatData));
-      setMessages(
-        messagesToLoad.length > 0
-          ? formatMessagesForUI(messagesToLoad)
-          : [
-              {
-                id: 1,
-                type: 'ai',
-                text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
-                isWelcome: true,
-                timestamp: new Date(),
-                messageId: 'welcome-msg'
-              }
-            ]
+      await handleLoadChat(
+        existingChat || {
+          id: activeId,
+          session_id: activeId,
+          title: chatTitle,
+          updated_at: new Date().toISOString(),
+        }
       );
-      setFeedbackGiven({});
-      setCopiedMessages({});
+
       setIsExpandedOverlayOpen(false);
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      requestAnimationFrame(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
     } catch (error) {
       console.error('Erro ao retomar conversa no iframe:', error);
       // Fallback local: quando a API falha (ex.: token expirado), restaura

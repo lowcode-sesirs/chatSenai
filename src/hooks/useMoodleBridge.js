@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
-const MOODLE_PARENT_ORIGIN = "https://pocsesi-rs.asdnet.com.br";
+const DEFAULT_MOODLE_PARENT_ORIGIN = "https://pocsesi-rs.asdnet.com.br";
 
 const buildCurrentRoute = (location) =>
   `${location.pathname}${location.search}${location.hash}`;
@@ -40,7 +40,7 @@ const ensureRouteHasMoodleToken = (route) => {
   }
 };
 
-const notifyParentRoute = (route) => {
+const notifyParentRoute = (route, targetOrigin) => {
   if (typeof window === "undefined") return;
   if (!window.parent || window.parent === window) return;
   const safeRoute = ensureRouteHasMoodleToken(route);
@@ -50,7 +50,7 @@ const notifyParentRoute = (route) => {
       type: "CHAT_ROUTE_UPDATE",
       route: safeRoute,
     },
-    MOODLE_PARENT_ORIGIN
+    targetOrigin
   );
 };
 
@@ -66,28 +66,29 @@ const getBestActiveChatId = () => {
   }
 };
 
-export const useMoodleBridge = () => {
+export const useMoodleBridge = ({ moodleOrigin, onChatExpanded } = {}) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const targetOrigin = moodleOrigin || DEFAULT_MOODLE_PARENT_ORIGIN;
   const currentRoute = buildCurrentRoute(location);
 
   useEffect(() => {
-    notifyParentRoute(currentRoute);
-  }, [currentRoute]);
+    notifyParentRoute(currentRoute, targetOrigin);
+  }, [currentRoute, targetOrigin]);
 
   useEffect(() => {
     const handleMessage = (event) => {
       const data = event?.data;
-      if (data?.type === "CHAT_EXPANDED" && event.origin === MOODLE_PARENT_ORIGIN) {
-        try {
-          window.dispatchEvent(new CustomEvent("senai_chat_expanded"));
-        } catch (_error) {
-          // noop
+      const isTrustedOrigin = event.origin === targetOrigin;
+
+      if (data?.type === "CHAT_EXPANDED" && isTrustedOrigin) {
+        if (typeof onChatExpanded === "function") {
+          onChatExpanded();
         }
         return;
       }
 
-      if (!data || data.type !== "MOODLE_CHAT_EXPAND_CLICKED") return;
+      if (!data || data.type !== "MOODLE_CHAT_EXPAND_CLICKED" || !isTrustedOrigin) return;
       console.log("MOODLE_CHAT_EXPAND_CLICKED recebido:", data);
 
       const expandedUrl = data?.expandedUrl;
@@ -124,7 +125,7 @@ export const useMoodleBridge = () => {
 
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [currentRoute, navigate]);
+  }, [currentRoute, navigate, onChatExpanded, targetOrigin]);
 };
 
 export default useMoodleBridge;

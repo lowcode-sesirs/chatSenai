@@ -128,6 +128,8 @@ const requestFreshMoodleTokenFromParent = async (timeoutMs = 3000) => {
     try {
       window.parent.postMessage({ type: 'senai_request_moodle_token' }, '*');
       window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
+      window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_TOKEN' }, '*');
+      window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_USER' }, '*');
     } catch (_error) {
       finish(null);
     }

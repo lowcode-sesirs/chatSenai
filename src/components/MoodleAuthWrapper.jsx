@@ -180,8 +180,11 @@ function MoodleAuthWrapper({ children }) {
       const data = event?.data;
       if (!data) return;
 
-      const payload =
-        data.type === 'senai_moodle_user' && data.payload ? data.payload : data;
+      const messageType = String(data.type || '');
+      const isUserEnvelope =
+        (messageType === 'senai_moodle_user' || messageType === 'SENAI_MOODLE_USER') &&
+        data.payload;
+      const payload = isUserEnvelope ? data.payload : data;
 
       const incomingToken = payload?.moodle_token || payload?.token || null;
       if (incomingToken) {
@@ -191,7 +194,26 @@ function MoodleAuthWrapper({ children }) {
         } catch (_error) {
           // noop
         }
-        await validateMoodleSession(incomingToken, 'moodle', 'chat').catch(() => {});
+        const tokenResult = await validateMoodleSession(incomingToken, 'moodle', 'chat').catch(() => null);
+        if (tokenResult?.ok && getToken()) {
+          const fallbackUser = getMoodleUser() || {};
+          const userData = {
+            userId: tokenResult.userId || fallbackUser.userId || null,
+            userName: tokenResult.userName || fallbackUser.userName || null,
+            userEmail: tokenResult.userEmail || fallbackUser.userEmail || null,
+            fromMoodle: true,
+          };
+          if (userData.userId || userData.userName || userData.userEmail) {
+            storeMoodleUser(userData);
+          }
+          setAuthState((prev) => ({
+            ...prev,
+            loading: false,
+            authenticated: true,
+            user: userData,
+            error: null,
+          }));
+        }
       }
 
       if (!(payload.userId || payload.userName || payload.userEmail)) return;
@@ -221,6 +243,8 @@ function MoodleAuthWrapper({ children }) {
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
         window.parent.postMessage({ type: 'senai_request_moodle_token' }, '*');
+        window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_USER' }, '*');
+        window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_TOKEN' }, '*');
         // Reforça a solicitação por alguns segundos para lidar com carregamento assíncrono do Moodle.
         intervalId = window.setInterval(() => {
           if (getToken()) {
@@ -229,6 +253,8 @@ function MoodleAuthWrapper({ children }) {
           }
           window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
           window.parent.postMessage({ type: 'senai_request_moodle_token' }, '*');
+          window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_USER' }, '*');
+          window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_TOKEN' }, '*');
         }, 2000);
         window.setTimeout(() => {
           if (intervalId) {
@@ -275,7 +301,10 @@ function MoodleAuthWrapper({ children }) {
     }
 
     if (isEmbedded) {
-      if (moodleToken) {
+      const shouldShowSyncing =
+        Boolean(moodleToken) && !authState.error;
+
+      if (shouldShowSyncing) {
         return (
           <div className="min-h-screen flex items-center justify-center bg-gray-50">
             <div className="text-center">

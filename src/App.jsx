@@ -2,12 +2,9 @@ import Welcome from './pages/Welcome'
 import PdfViewerPage from './pages/PdfViewerPage'
 import MoodleAuthWrapper from './components/MoodleAuthWrapper'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import useMoodleBridge from './hooks/useMoodleBridge'
 import './App.css'
 
 function AppRoutes() {
-  useMoodleBridge();
-
   return (
     <MoodleAuthWrapper>
       <Routes>
