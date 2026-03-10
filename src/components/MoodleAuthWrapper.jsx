@@ -11,6 +11,7 @@ import {
 import { getToken } from '../services/tokenStore';
 
 const isDevLoginEnabled = String(import.meta.env.VITE_ENABLE_DEV_LOGIN || '').toLowerCase() === 'true';
+const MOODLE_CONTEXT_KEY = 'senai_moodle_context';
 
 function MoodleAuthWrapper({ children }) {
   const [authState, setAuthState] = useState({
@@ -32,6 +33,22 @@ function MoodleAuthWrapper({ children }) {
     const validateAuth = async () => {
       try {
         console.log('Iniciando validacao de autenticacao...');
+        const url = new URL(window.location.href);
+        const hasMoodleRouteParams =
+          url.searchParams.has('moodle_token') ||
+          url.searchParams.has('token') ||
+          url.searchParams.has('session_id') ||
+          url.searchParams.has('active_chat_id') ||
+          url.searchParams.has('chat_id') ||
+          url.searchParams.get('origin') === 'moodle';
+
+        if (hasMoodleRouteParams) {
+          try {
+            sessionStorage.setItem(MOODLE_CONTEXT_KEY, '1');
+          } catch (_error) {
+            // noop
+          }
+        }
 
         // Persist moodle_token when present in URL.
         const tokenInfo = getMoodleTokenFromURL();
@@ -269,6 +286,37 @@ function MoodleAuthWrapper({ children }) {
         );
       }
 
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+          <div className="text-center max-w-sm">
+            <p className="text-gray-700 font-medium">Sessao do Moodle indisponivel.</p>
+            <p className="text-gray-500 text-sm mt-1">Reabra o chat pelo Moodle para gerar um novo token.</p>
+          </div>
+        </div>
+      );
+    }
+
+    const persistedMoodleContext =
+      (() => {
+        try {
+          return sessionStorage.getItem(MOODLE_CONTEXT_KEY) === '1';
+        } catch (_error) {
+          return false;
+        }
+      })();
+
+    const hasMoodleRouteParams =
+      window.location.search.includes('session_id=') ||
+      window.location.search.includes('active_chat_id=') ||
+      window.location.search.includes('chat_id=');
+
+    const isMoodleContext =
+      Boolean(moodleToken) ||
+      window.location.search.includes('origin=moodle') ||
+      hasMoodleRouteParams ||
+      persistedMoodleContext;
+
+    if (isMoodleContext) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
           <div className="text-center max-w-sm">

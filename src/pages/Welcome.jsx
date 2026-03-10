@@ -63,6 +63,7 @@ function Welcome() {
   const mainScrollRef = useRef(null);
   const ACTIVE_CHAT_ID_KEY = 'activeChatId';
   const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
+  const CHAT_SNAPSHOT_PREFIX = 'chatSnapshot:';
   const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
   const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
   const latestActiveChatRef = useRef(null);
@@ -162,6 +163,22 @@ function Welcome() {
     latestActiveChatRef.current = activeChatId;
     latestIsDraftRef.current = !hasUserMessages;
   }, [messages, currentChatId, sessionId]);
+
+  useEffect(() => {
+    const activeChatId = currentChatId || sessionId || null;
+    if (!activeChatId) return;
+    try {
+      const snapshot = {
+        chatId: activeChatId,
+        title: chatTitle || '',
+        messages,
+        updatedAt: Date.now()
+      };
+      localStorage.setItem(`${CHAT_SNAPSHOT_PREFIX}${activeChatId}`, JSON.stringify(snapshot));
+    } catch (_error) {
+      // noop
+    }
+  }, [messages, currentChatId, sessionId, chatTitle]);
 
   useEffect(() => {
     const handleParentExpandSync = (event) => {
@@ -1272,8 +1289,7 @@ Status: Erro 500 - Problema interno do servidor`;
           }
 
           if (storedChatId && storedChatId !== localActiveChatId) {
-            saveActiveChatState(storedChatId, false);
-            storedChatIsDraft = false;
+            saveActiveChatState(storedChatId, storedChatIsDraft);
           } else if (storedChatId && !explicitChatIdFromUrl) {
             // Garante que a URL do chat expandido reflita o chat ativo restaurado.
             syncActiveChatInUrl(storedChatId, storedChatIsDraft);
@@ -1380,6 +1396,8 @@ Status: Erro 500 - Problema interno do servidor`;
     const newSessionId = generateUUID();
     setSessionId(newSessionId);
     setCurrentChatId(null);
+    latestActiveChatRef.current = newSessionId;
+    latestIsDraftRef.current = true;
 
     // Atualiza imediatamente o chat ativo para o widget maximizado abrir limpo
     saveActiveChatState(newSessionId, true);
@@ -1410,7 +1428,15 @@ Status: Erro 500 - Problema interno do servidor`;
   };
 
   const handleResumeConversationHere = async () => {
-    const activeId = currentChatId || sessionId;
+    let activeId = currentChatId || sessionId;
+    try {
+      const storedActiveId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+      if (storedActiveId) {
+        activeId = storedActiveId;
+      }
+    } catch (_error) {
+      // noop
+    }
     if (!activeId) {
       setIsExpandedOverlayOpen(false);
       return;
@@ -1447,8 +1473,36 @@ Status: Erro 500 - Problema interno do servidor`;
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     } catch (error) {
       console.error('Erro ao retomar conversa no iframe:', error);
-      // Se a autenticação expirar durante o refresh, mantém a conversa atual em tela.
-      // O fluxo de renovação de sessão continua no próximo envio/requisição.
+      // Fallback local: quando a API falha (ex.: token expirado), restaura
+      // o snapshot mais recente salvo pela aba expandida.
+      try {
+        const rawSnapshot = localStorage.getItem(`${CHAT_SNAPSHOT_PREFIX}${activeId}`);
+        if (rawSnapshot) {
+          const snapshot = JSON.parse(rawSnapshot);
+          const snapshotMessages = Array.isArray(snapshot?.messages) ? snapshot.messages : [];
+          setCurrentChatId(activeId);
+          setSessionId(activeId);
+          setChatTitle(snapshot?.title || '');
+          setMessages(
+            snapshotMessages.length > 0
+              ? snapshotMessages
+              : [
+                  {
+                    id: 1,
+                    type: 'ai',
+                    text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+                    isWelcome: true,
+                    timestamp: new Date(),
+                    messageId: 'welcome-msg'
+                  }
+                ]
+          );
+          setFeedbackGiven({});
+          setCopiedMessages({});
+        }
+      } catch (_snapshotError) {
+        // noop
+      }
       setIsExpandedOverlayOpen(false);
     } finally {
       setIsRefreshingHistory(false);
