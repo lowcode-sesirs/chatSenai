@@ -46,6 +46,7 @@ function Welcome() {
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
   const [isExpandedOverlayOpen, setIsExpandedOverlayOpen] = useState(false);
   const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
+  const [, setRelativeTimeTick] = useState(0);
   const [messages, setMessages] = useState([
     {
       id: 1,
@@ -244,6 +245,11 @@ function Welcome() {
   };
 
   const handleScrollToBottom = () => {
+    const container = mainScrollRef.current;
+    if (container?.scrollTo) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      return;
+    }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   };
 
@@ -446,8 +452,8 @@ const normalizeMessageForDisplay = (value) => {
   // Atualizar tempos relativos a cada minuto
   useEffect(() => {
     const interval = setInterval(() => {
-      // Força re-render para atualizar os tempos relativos
-      setMessages(prev => [...prev]);
+      // Força re-render para atualizar os tempos relativos sem alterar messages
+      setRelativeTimeTick((prev) => prev + 1);
     }, 60000); // Atualiza a cada 60 segundos
 
     return () => clearInterval(interval);
@@ -1658,7 +1664,7 @@ Status: Erro 500 - Problema interno do servidor`;
                   style={{ width: '140px' }}
                 />
               ) : (
-                <span className="text-xs font-medium">{displayChatTitle}</span>
+                <span className="text-xs font-medium btTituloConversa">{displayChatTitle}</span>
               )}
             </button>
           </div>
@@ -2114,8 +2120,8 @@ Status: Erro 500 - Problema interno do servidor`;
                       }
                     }}
                     placeholder="No que posso te ajudar hoje?"
-                    className="w-full pr-12 md:pr-14 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base resize-none"
-                    style={{ height: '80px', borderColor: '#262626', padding: '12px' }}
+                    className="scroll-modern w-full pr-12 md:pr-14 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base"
+                    style={{ height: '80px', borderColor: '#262626', padding: '12px 40px 12px 12px' }}
                     rows={1}
                   />
                   <button

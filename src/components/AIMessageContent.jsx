@@ -8,6 +8,37 @@ function AIMessageContent({ message }) {
   const [imageErrors, setImageErrors] = useState({});
   const [lightboxImage, setLightboxImage] = useState(null);
 
+  const isEmbeddedIframe = () =>
+    typeof window !== 'undefined' && window.parent && window.parent !== window;
+
+  const handleOpenImage = (img) => {
+    if (!img?.url) return;
+
+    if (isEmbeddedIframe()) {
+      try {
+        window.parent.postMessage(
+          {
+            type: 'CHAT_IMAGE_LIGHTBOX_OPEN',
+            image: {
+              url: img.url,
+              alt: img.alt || 'Imagem do conteúdo',
+              title: img.alt || 'Imagem do conteúdo',
+            }
+          },
+          '*'
+        );
+        return;
+      } catch (error) {
+        console.warn('Falha ao solicitar lightbox de imagem ao parent:', error);
+      }
+    }
+
+    setLightboxImage({
+      url: img.url,
+      alt: img.alt || 'Imagem do conteúdo'
+    });
+  };
+
   const getPdfViewerUrl = (reference) => {
     const contentSourceId = reference?.contentSourceId || reference?.id;
     if (!contentSourceId) return null;
@@ -96,12 +127,7 @@ function AIMessageContent({ message }) {
                 <button
                   type="button"
                   className="block w-full text-left"
-                  onClick={() =>
-                    setLightboxImage({
-                      url: img.url,
-                      alt: img.alt || 'Imagem do conteúdo'
-                    })
-                  }
+                  onClick={() => handleOpenImage(img)}
                   title="Abrir imagem"
                   aria-label="Abrir imagem"
                   style={{ background: 'none', border: 'none', padding: 0 }}
@@ -275,4 +301,3 @@ function AIMessageContent({ message }) {
 }
 
 export default AIMessageContent;
-

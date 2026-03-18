@@ -39,3 +39,42 @@
 .read-the-docs {
   color: #888;
 }
+
+.btTituloConversa{
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Scrollbar */
+/* scrollbar moderna */
+.scroll-modern {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+/* Chrome / Edge / Safari */
+.scroll-modern::-webkit-scrollbar {
+  width: 4px;
+}
+
+.scroll-modern::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-modern::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  transition: background 0.2s ease;
+}
+
+/* aparece no hover */
+.scroll-modern:hover::-webkit-scrollbar-thumb {
+  background: rgba(100,100,100,0.5);
+}
+
+/* Firefox */
+.scroll-modern:hover {
+  scrollbar-color: rgba(100,100,100,0.5) transparent;
+}

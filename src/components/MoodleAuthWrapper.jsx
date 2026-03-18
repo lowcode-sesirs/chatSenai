@@ -63,7 +63,7 @@ function MoodleAuthWrapper({ children }) {
         const existingUser = getMoodleUser();
         if (existingUser && (existingUser.userId || existingUser.userName || existingUser.userEmail)) {
           const hasAccessToken = await ensureAccessToken();
-          if (hasAccessToken || import.meta.env.DEV) {
+          if (hasAccessToken) {
             const isGuest = existingUser.userId === 'guest' || existingUser.fromMoodle === false;
             if (!isGuest || (window.__MOODLE_USER__ && window.__MOODLE_USER__.userId)) {
               setAuthState({
@@ -75,23 +75,6 @@ function MoodleAuthWrapper({ children }) {
               return;
             }
           }
-        }
-
-        const isDev = import.meta.env.DEV;
-        if (isDev) {
-          const devUser = {
-            userId: 'dev-user',
-            userName: 'Desenvolvedor',
-            fromMoodle: false,
-          };
-          storeMoodleUser(devUser);
-          setAuthState({
-            loading: false,
-            authenticated: true,
-            user: devUser,
-            error: null,
-          });
-          return;
         }
 
         if (isFromMoodle()) {
@@ -146,22 +129,6 @@ function MoodleAuthWrapper({ children }) {
         });
       } catch (error) {
         console.error('Erro na validacao de autenticacao:', error);
-        if (import.meta.env.DEV) {
-          const devUser = {
-            userId: 'dev-user',
-            userName: 'Desenvolvedor',
-            fromMoodle: false,
-          };
-          storeMoodleUser(devUser);
-          setAuthState({
-            loading: false,
-            authenticated: true,
-            user: devUser,
-            error: null,
-          });
-          return;
-        }
-
         setAuthState({
           loading: false,
           authenticated: false,
