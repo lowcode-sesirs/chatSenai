@@ -57,8 +57,8 @@ const notifyParentRoute = (route, targetOrigin) => {
 const getBestActiveChatId = () => {
   try {
     return (
-      localStorage.getItem("pendingExpandChatId") ||
-      localStorage.getItem("activeChatId") ||
+      sessionStorage.getItem("pendingExpandChatId") ||
+      sessionStorage.getItem("activeChatId") ||
       null
     );
   } catch (_error) {
