@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ArrowDown, Pencil, Square } from 'lucide-react';
 import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat } from '../services/chatService';
@@ -71,6 +71,41 @@ function Welcome() {
   const latestActiveChatRef = useRef(null);
   const latestIsDraftRef = useRef(false);
 
+  const removeLegacyActiveChatState = () => {
+    try {
+      localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+      localStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+    } catch (_error) {
+      // noop
+    }
+  };
+
+  const clearStoredChatSnapshots = () => {
+    try {
+      const sessionKeysToRemove = [];
+      for (let index = 0; index < sessionStorage.length; index += 1) {
+        const key = sessionStorage.key(index);
+        if (key?.startsWith(CHAT_SNAPSHOT_PREFIX)) {
+          sessionKeysToRemove.push(key);
+        }
+      }
+      sessionKeysToRemove.forEach((key) => sessionStorage.removeItem(key));
+
+      const localKeysToRemove = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key?.startsWith(CHAT_SNAPSHOT_PREFIX)) {
+          localKeysToRemove.push(key);
+        }
+      }
+      localKeysToRemove.forEach((key) => localStorage.removeItem(key));
+    } catch (_error) {
+      // noop
+    }
+  };
+
   useMoodleBridge({
     moodleOrigin: import.meta.env.VITE_MOODLE_ORIGIN || MOODLE_PARENT_ORIGIN,
     onChatExpanded: () => setIsExpandedOverlayOpen(true),
@@ -92,10 +127,11 @@ function Welcome() {
   const saveActiveChatState = (chatId, isDraft = false) => {
     if (!chatId) return;
     try {
-      localStorage.setItem(ACTIVE_CHAT_ID_KEY, chatId);
-      localStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
-      localStorage.setItem(PENDING_EXPAND_CHAT_ID_KEY, chatId);
-      localStorage.setItem(PENDING_EXPAND_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      sessionStorage.setItem(ACTIVE_CHAT_ID_KEY, chatId);
+      sessionStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      sessionStorage.setItem(PENDING_EXPAND_CHAT_ID_KEY, chatId);
+      sessionStorage.setItem(PENDING_EXPAND_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      removeLegacyActiveChatState();
       syncActiveChatInUrl(chatId, isDraft);
       if (window.parent && window.parent !== window) {
         const expandedParams = buildExpandedChatParams(chatId, isDraft);
@@ -154,10 +190,11 @@ function Welcome() {
 
   const clearActiveChatState = () => {
     try {
-      localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
-      localStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
-      localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
-      localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+      sessionStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+      sessionStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+      sessionStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);  
+      sessionStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+      removeLegacyActiveChatState();
       syncActiveChatInUrl(null, false);
     } catch (error) {
       console.warn('Falha ao limpar estado do chat ativo:', error);
@@ -181,11 +218,16 @@ function Welcome() {
         messages,
         updatedAt: Date.now()
       };
-      localStorage.setItem(`${CHAT_SNAPSHOT_PREFIX}${activeChatId}`, JSON.stringify(snapshot));
+      sessionStorage.setItem(`${CHAT_SNAPSHOT_PREFIX}${activeChatId}`, JSON.stringify(snapshot));
+      localStorage.removeItem(`${CHAT_SNAPSHOT_PREFIX}${activeChatId}`);
     } catch (_error) {
       // noop
     }
   }, [messages, currentChatId, sessionId, chatTitle]);
+
+  useEffect(() => {
+    removeLegacyActiveChatState();
+  }, []);
 
   useEffect(() => {
     const handleParentExpandSync = (event) => {
@@ -296,6 +338,9 @@ function Welcome() {
   };
 
   const hasUserMessages = messages.some((msg) => msg.type === 'user');
+  const chatInputPlaceholder = hasUserMessages
+    ? 'Pergunte qualquer coisa'
+    : 'No que posso te ajudar hoje?';
   const displayChatTitle = hasUserMessages
     ? ((chatTitle || '').trim() || 'Sem titulo')
     : 'Chat sem título';
@@ -776,7 +821,8 @@ const normalizeMessageForDisplay = (value) => {
           setSessionId(currentSessionId);
           setCurrentChatId(currentSessionId);
           try {
-            localStorage.setItem('activeChatId', currentSessionId);
+            sessionStorage.setItem(ACTIVE_CHAT_ID_KEY, currentSessionId);
+            localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
           } catch (_error) {
             // noop
           }
@@ -1265,15 +1311,15 @@ Status: Erro 500 - Problema interno do servidor`;
             urlParams.get('session_id');
           const explicitDraftFromUrl = urlParams.get('active_chat_draft') === '1';
 
-          localActiveChatId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+          localActiveChatId = sessionStorage.getItem(ACTIVE_CHAT_ID_KEY);
           // Apenas a tela expandida deve consumir o pendingExpandChatId.
           // No iframe, manter esse valor evita perder o chat correto ao clicar em expandir.
           const pendingExpandChatId = !isEmbedded
-            ? localStorage.getItem(PENDING_EXPAND_CHAT_ID_KEY)
+            ? sessionStorage.getItem(PENDING_EXPAND_CHAT_ID_KEY)
             : null;
           const pendingExpandIsDraft = !isEmbedded &&
-            localStorage.getItem(PENDING_EXPAND_CHAT_DRAFT_KEY) === '1';
-          storedChatIsDraft = localStorage.getItem(ACTIVE_CHAT_DRAFT_KEY) === '1';
+            sessionStorage.getItem(PENDING_EXPAND_CHAT_DRAFT_KEY) === '1';
+          storedChatIsDraft = sessionStorage.getItem(ACTIVE_CHAT_DRAFT_KEY) === '1';
 
           // Prioridade:
           // 1) active_chat_id/chat_id/session_id explícitos na URL do expandido
@@ -1283,8 +1329,8 @@ Status: Erro 500 - Problema interno do servidor`;
           storedChatId = explicitChatIdFromUrl || pendingExpandChatId || localActiveChatId;
           if (!explicitChatIdFromUrl && pendingExpandChatId) {
             storedChatIsDraft = pendingExpandIsDraft;
-            localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
-            localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+            sessionStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+            sessionStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
           }
 
           if (!localActiveChatId && explicitChatIdFromUrl) {
@@ -1302,9 +1348,9 @@ Status: Erro 500 - Problema interno do servidor`;
         }
 
       try {
-        if (!storedChatId) storedChatId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+        if (!storedChatId) storedChatId = sessionStorage.getItem(ACTIVE_CHAT_ID_KEY);
       } catch (error) {
-        console.warn('Falha ao ler activeChatId do localStorage:', error);
+        console.warn('Falha ao ler activeChatId do sessionStorage:', error);
         return;
       }
 
@@ -1433,7 +1479,7 @@ Status: Erro 500 - Problema interno do servidor`;
   const handleResumeConversationHere = async () => {
     let activeId = currentChatId || sessionId;
     try {
-      const storedActiveId = localStorage.getItem(ACTIVE_CHAT_ID_KEY);
+      const storedActiveId = sessionStorage.getItem(ACTIVE_CHAT_ID_KEY);
       if (storedActiveId) {
         activeId = storedActiveId;
       }
@@ -1469,7 +1515,7 @@ Status: Erro 500 - Problema interno do servidor`;
       // Fallback local: quando a API falha (ex.: token expirado), restaura
       // o snapshot mais recente salvo pela aba expandida.
       try {
-        const rawSnapshot = localStorage.getItem(`${CHAT_SNAPSHOT_PREFIX}${activeId}`);
+        const rawSnapshot = sessionStorage.getItem(`${CHAT_SNAPSHOT_PREFIX}${activeId}`);
         if (rawSnapshot) {
           const snapshot = JSON.parse(rawSnapshot);
           const snapshotMessages = Array.isArray(snapshot?.messages) ? snapshot.messages : [];
@@ -1579,6 +1625,8 @@ Status: Erro 500 - Problema interno do servidor`;
   };
 
   const handleConfirmLogout = () => {
+    clearActiveChatState();
+    clearStoredChatSnapshots();
     if (!moodleUser?.fromMoodle) {
       clearToken();
       clearMoodleUser();
@@ -2119,7 +2167,7 @@ Status: Erro 500 - Problema interno do servidor`;
                         handleSubmit(e);
                       }
                     }}
-                    placeholder="No que posso te ajudar hoje?"
+                    placeholder={chatInputPlaceholder}
                     className="scroll-modern w-full pr-12 md:pr-14 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base"
                     style={{ height: '80px', borderColor: '#262626', padding: '12px 40px 12px 12px' }}
                     rows={1}

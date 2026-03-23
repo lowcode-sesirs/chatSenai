@@ -1,5 +1,11 @@
 import { clearToken, getToken, setToken } from './tokenStore';
 
+const ACTIVE_CHAT_ID_KEY = 'activeChatId';
+const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
+const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
+const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
+const CHAT_SNAPSHOT_PREFIX = 'chatSnapshot:';
+
 const clearStoredMoodleIdentity = () => {
   try {
     sessionStorage.removeItem('moodle_user');
@@ -12,6 +18,48 @@ const clearStoredMoodleIdentity = () => {
     if (typeof window !== 'undefined') {
       delete window.__MOODLE_USER__;
     }
+  } catch (_error) {
+    // noop
+  }
+};
+
+const clearPersistedChatState = () => {
+  try {
+    sessionStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+    sessionStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+    sessionStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+    sessionStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+  } catch (_error) {
+    // noop
+  }
+
+  try {
+    const sessionKeysToRemove = [];
+    for (let index = 0; index < sessionStorage.length; index += 1) {
+      const key = sessionStorage.key(index);
+      if (key?.startsWith(CHAT_SNAPSHOT_PREFIX)) {
+        sessionKeysToRemove.push(key);
+      }
+    }
+    sessionKeysToRemove.forEach((key) => sessionStorage.removeItem(key));
+  } catch (_error) {
+    // noop
+  }
+
+  try {
+    localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+    localStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+    localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+    localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+
+    const localKeysToRemove = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(CHAT_SNAPSHOT_PREFIX)) {
+        localKeysToRemove.push(key);
+      }
+    }
+    localKeysToRemove.forEach((key) => localStorage.removeItem(key));
   } catch (_error) {
     // noop
   }
@@ -83,10 +131,17 @@ export const getMoodleTokenFromURL = () => {
     const hasTokenChanged =
       (tokenFromSession && tokenFromSession !== tokenFromUrl) ||
       (tokenFromLocal && tokenFromLocal !== tokenFromUrl);
+    const hasExplicitChatRoute =
+      urlParams.has('session_id') ||
+      urlParams.has('active_chat_id') ||
+      urlParams.has('chat_id');
 
     if (hasTokenChanged) {
       clearToken();
       clearStoredMoodleIdentity();
+      if (!hasExplicitChatRoute) {
+        clearPersistedChatState();
+      }
     }
 
     sessionStorage.setItem('moodle_token', tokenFromUrl);
