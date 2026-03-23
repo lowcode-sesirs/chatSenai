@@ -338,6 +338,9 @@ function Welcome() {
   };
 
   const hasUserMessages = messages.some((msg) => msg.type === 'user');
+  const chatInputPlaceholder = hasUserMessages
+    ? 'Pergunte qualquer coisa'
+    : 'No que posso te ajudar hoje?';
   const displayChatTitle = hasUserMessages
     ? ((chatTitle || '').trim() || 'Sem titulo')
     : 'Chat sem título';
@@ -2164,7 +2167,7 @@ Status: Erro 500 - Problema interno do servidor`;
                         handleSubmit(e);
                       }
                     }}
-                    placeholder="No que posso te ajudar hoje?"
+                    placeholder={chatInputPlaceholder}
                     className="scroll-modern w-full pr-12 md:pr-14 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base"
                     style={{ height: '80px', borderColor: '#262626', padding: '12px 40px 12px 12px' }}
                     rows={1}
