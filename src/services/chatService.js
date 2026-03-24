@@ -11,6 +11,9 @@ const API_BASE_URL =
   RUNTIME_API_BASE_URL ||
   import.meta.env.VITE_API_BASE_URL ||
   '/api';
+const DEFAULT_COURSE_EXTERNAL_ID =
+  import.meta.env.VITE_COURSE_EXTERNAL_ID ||
+  'CursoPiloto_2';
 
 const X_DEV_USER = import.meta.env.VITE_X_DEV_USER || '{{x-dev-user}}';
 
@@ -211,7 +214,7 @@ const fetchWithAuthRetry = async (buildRequest) => {
 };
 
 // POST - Iniciar nova conversa
-export const startChat = async (message, courseExternalId = 'CursoPiloto') => {
+export const startChat = async (message, courseExternalId = DEFAULT_COURSE_EXTERNAL_ID) => {
   try {
     const normalizedMessage = normalizeMessageForRequest(message);
     const url = `${API_BASE_URL}/chat`;
