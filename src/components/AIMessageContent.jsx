@@ -1,4 +1,7 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
+
+const USE_INTERNAL_PDF_VIEWER =
+  String(import.meta.env.VITE_USE_INTERNAL_PDF_VIEWER || 'false').toLowerCase() === 'true';
 
 /**
  * Componente para renderizar conteúdo de mensagens da IA
@@ -45,6 +48,87 @@ function AIMessageContent({ message }) {
     const page = Number(reference?.targetPage || 1);
     const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
     return `/pdf/${contentSourceId}?page=${safePage}`;
+  };
+
+  const getDirectReferenceUrl = (reference) => {
+    const normalizeCandidate = (value) => {
+      if (!value || typeof value !== 'string') return null;
+
+      const cleanedValue = value
+        .trim()
+        .replace(/^"+|"+$/g, '')
+        .replace(/^%22|%22$/gi, '');
+
+      if (/^https?:\/\//i.test(cleanedValue)) {
+        return cleanedValue;
+      }
+
+      return null;
+    };
+
+    const explicitCandidates = [
+      reference?.Link,
+      reference?.link,
+      reference?.url,
+      reference?.external_url,
+      reference?.externalUrl,
+    ]
+      .map(normalizeCandidate)
+      .filter(Boolean);
+
+    const preferredExplicitCandidate = explicitCandidates.find((value) =>
+      value.includes('drive.google.com')
+    );
+
+    if (preferredExplicitCandidate) {
+      return preferredExplicitCandidate;
+    }
+
+    if (explicitCandidates.length > 0) {
+      return explicitCandidates[0];
+    }
+
+    if (reference && typeof reference === 'object') {
+      const discoveredCandidates = Object.values(reference)
+        .map(normalizeCandidate)
+        .filter(Boolean);
+
+      const preferredDiscoveredCandidate = discoveredCandidates.find((value) =>
+        value.includes('drive.google.com')
+      );
+
+      if (preferredDiscoveredCandidate) {
+        return preferredDiscoveredCandidate;
+      }
+
+      if (discoveredCandidates.length > 0) {
+        return discoveredCandidates[0];
+      }
+    }
+
+    return null;
+  };
+
+  const getReferenceHref = (reference) => {
+    const directLink = getDirectReferenceUrl(reference);
+    const viewerUrl = getPdfViewerUrl(reference);
+
+    if (USE_INTERNAL_PDF_VIEWER) {
+      return viewerUrl;
+    }
+
+    return directLink;
+  };
+
+  const handleOpenReference = (event, reference) => {
+    const directLink = getDirectReferenceUrl(reference);
+    const href = getReferenceHref(reference);
+    if (!href) return;
+
+    if (!USE_INTERNAL_PDF_VIEWER && directLink) {
+      event.preventDefault();
+      window.open(directLink, '_blank', 'noopener,noreferrer');
+    }
   };
 
   const renderBoldSegments = (text, keyPrefix) => {
@@ -185,36 +269,37 @@ function AIMessageContent({ message }) {
         <div className="mt-4 p-3 bg-gray-50 rounded-lg border-l-4 border-[#E84910]">
           <p className="text-sm font-medium text-gray-700 mb-2">Fontes consultadas:</p>
           <div className="space-y-1">
-            {references.map((ref, index) => (
-              <div key={index} className="text-xs text-gray-600">
-                Fonte: {ref.source || ref.title || ref}
-                {ref.page && `, paginas: ${ref.page}`}
-                {ref.chapter && `, ${ref.chapter}`}
-                {(getPdfViewerUrl(ref) || ref.link) && (
-                  <div className="mt-1">
-                    {getPdfViewerUrl(ref) ? (
-                      <a
-                        href={getPdfViewerUrl(ref)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[#E84910] hover:underline"
-                      >
-                        {ref.source || ref.title || 'Abrir apostila'}
-                      </a>
-                    ) : (
-                      <a
-                        href={ref.link}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-[#E84910] hover:underline"
-                      >
-                        {ref.source || ref.title || 'Abrir apostila'}
-                      </a>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
+            {references.map((ref, index) => {
+              const referenceHref = getReferenceHref(ref);
+              const referenceLabel = ref.source || ref.title || 'Abrir apostila';
+              console.log('Referencia renderizada:', {
+                ref,
+                referenceLabel,
+                referenceHref,
+                directLink: getDirectReferenceUrl(ref),
+              });
+
+              return (
+                <div key={index} className="text-xs text-gray-600">
+                  Fonte:{' '}
+                  {referenceHref ? (
+                    <a
+                      href={referenceHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(event) => handleOpenReference(event, ref)}
+                      className="text-[#E84910] hover:underline"
+                    >
+                      {referenceLabel}
+                    </a>
+                  ) : (
+                    <span>{referenceLabel}</span>
+                  )}
+                  {ref.page && `, paginas: ${ref.page}`}
+                  {ref.chapter && `, ${ref.chapter}`}
+                </div>
+              );
+            })}
           </div>
         </div>
       );
