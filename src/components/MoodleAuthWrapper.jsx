@@ -1,0 +1,363 @@
+import { useEffect, useState } from 'react';
+import DevLogin from '../pages/DevLogin';
+import {
+  decodeMoodleToken,
+  getMoodleTokenFromURL,
+  getMoodleUser,
+  isFromMoodle,
+  storeMoodleUser,
+  validateMoodleSession,
+} from '../services/moodleAuthService';
+import { getToken } from '../services/tokenStore';
+
+const isDevLoginEnabled = String(import.meta.env.VITE_ENABLE_DEV_LOGIN || '').toLowerCase() === 'true';
+const MOODLE_CONTEXT_KEY = 'senai_moodle_context';
+
+function MoodleAuthWrapper({ children }) {
+  const [authState, setAuthState] = useState({
+    loading: true,
+    authenticated: false,
+    user: null,
+    error: null,
+  });
+
+  useEffect(() => {
+    const ensureAccessToken = async () => {
+      if (getToken()) return true;
+      const { token, origin, page } = getMoodleTokenFromURL();
+      if (!token) return false;
+      const result = await validateMoodleSession(token, origin, page);
+      return !!(result?.ok && getToken());
+    };
+
+    const validateAuth = async () => {
+      try {
+        console.log('Iniciando validacao de autenticacao...');
+        const url = new URL(window.location.href);
+        const hasMoodleRouteParams =
+          url.searchParams.has('moodle_token') ||
+          url.searchParams.has('token') ||
+          url.searchParams.has('session_id') ||
+          url.searchParams.has('active_chat_id') ||
+          url.searchParams.has('chat_id') ||
+          url.searchParams.get('origin') === 'moodle';
+
+        if (hasMoodleRouteParams) {
+          try {
+            sessionStorage.setItem(MOODLE_CONTEXT_KEY, '1');
+          } catch (_error) {
+            // noop
+          }
+        }
+
+        // Persist moodle_token when present in URL.
+        const tokenInfo = getMoodleTokenFromURL();
+        const isEmbedded = window.parent && window.parent !== window;
+
+        // In iframe mode, só faz exchange se ainda não houver access_token.
+        // Isso evita derrubar uma sessão válida quando o moodle_token curto já expirou.
+        if (isEmbedded && tokenInfo?.token && !getToken()) {
+          await validateMoodleSession(tokenInfo.token, tokenInfo.origin, tokenInfo.page);
+        }
+
+        const existingUser = getMoodleUser();
+        if (existingUser && (existingUser.userId || existingUser.userName || existingUser.userEmail)) {
+          const hasAccessToken = await ensureAccessToken();
+          if (hasAccessToken) {
+            const isGuest = existingUser.userId === 'guest' || existingUser.fromMoodle === false;
+            if (!isGuest || (window.__MOODLE_USER__ && window.__MOODLE_USER__.userId)) {
+              setAuthState({
+                loading: false,
+                authenticated: true,
+                user: existingUser,
+                error: null,
+              });
+              return;
+            }
+          }
+        }
+
+        if (isFromMoodle()) {
+          const { token, origin, page } = getMoodleTokenFromURL();
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout na validacao')), 10000)
+          );
+
+          const result = await Promise.race([
+            validateMoodleSession(token, origin, page),
+            timeoutPromise,
+          ]);
+
+          if (result?.ok) {
+            const userData = {
+              userId: result.userId,
+              userName: result.userName,
+              userEmail: result.userEmail,
+              courseId: result.courseId,
+              courseName: result.courseName,
+              courseExternalId: result.courseExternalId,
+              fromMoodle: true,
+            };
+            storeMoodleUser(userData);
+            setAuthState({
+              loading: false,
+              authenticated: true,
+              user: userData,
+              error: null,
+            });
+
+            // Keep moodle_token in iframe context (helps fresh loads in embedded mode).
+            const isEmbedded = window.parent && window.parent !== window;
+            if (!isEmbedded) {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('moodle_token');
+              url.searchParams.delete('token');
+              window.history.replaceState({}, '', url.toString());
+            }
+            return;
+          }
+
+          const decodedUser = decodeMoodleToken(token);
+          if (decodedUser?.userId) {
+            // Não autentica apenas com token decodificado: /chat/* exige access_token real.
+            storeMoodleUser(decodedUser);
+          }
+        }
+
+        setAuthState({
+          loading: false,
+          authenticated: false,
+          user: null,
+          error: 'Acesso nao autorizado. Acesse via Moodle.',
+        });
+      } catch (error) {
+        console.error('Erro na validacao de autenticacao:', error);
+        setAuthState({
+          loading: false,
+          authenticated: false,
+          user: null,
+          error: 'Erro na validacao da sessao',
+        });
+      }
+    };
+
+    const timeoutId = setTimeout(validateAuth, 100);
+    return () => clearTimeout(timeoutId);
+  }, []);
+
+  useEffect(() => {
+    const handleMessage = async (event) => {
+      const data = event?.data;
+      if (!data) return;
+
+      const messageType = String(data.type || '');
+      const isUserEnvelope =
+        (messageType === 'senai_moodle_user' || messageType === 'SENAI_MOODLE_USER') &&
+        data.payload;
+      const payload = isUserEnvelope ? data.payload : data;
+
+      const incomingToken = payload?.moodle_token || payload?.token || null;
+      if (incomingToken) {
+        try {
+          sessionStorage.setItem('moodle_token', incomingToken);
+          localStorage.setItem('moodle_token', incomingToken);
+        } catch (_error) {
+          // noop
+        }
+        const tokenResult = await validateMoodleSession(incomingToken, 'moodle', 'chat').catch(() => null);
+        if (tokenResult?.ok && getToken()) {
+          const fallbackUser = getMoodleUser() || {};
+          const userData = {
+            userId: tokenResult.userId || fallbackUser.userId || null,
+            userName: tokenResult.userName || fallbackUser.userName || null,
+            userEmail: tokenResult.userEmail || fallbackUser.userEmail || null,
+            courseId: tokenResult.courseId || fallbackUser.courseId || payload.courseId || payload.course_id || null,
+            courseName: tokenResult.courseName || fallbackUser.courseName || payload.courseName || payload.course_name || null,
+            courseExternalId: tokenResult.courseExternalId || fallbackUser.courseExternalId || payload.courseExternalId || payload.course_external_id || null,
+            fromMoodle: true,
+          };
+          if (userData.userId || userData.userName || userData.userEmail) {
+            storeMoodleUser(userData);
+          }
+          setAuthState((prev) => ({
+            ...prev,
+            loading: false,
+            authenticated: true,
+            user: userData,
+            error: null,
+          }));
+        }
+      }
+
+      if (!(payload.userId || payload.userName || payload.userEmail)) return;
+
+      storeMoodleUser(payload);
+
+      if (!getToken()) {
+        await validateMoodleSession(
+          payload.moodle_token || payload.token || getMoodleTokenFromURL().token,
+          'moodle',
+          'chat'
+        ).catch(() => {});
+      }
+
+      setAuthState((prev) => ({
+        ...prev,
+        loading: false,
+        authenticated: true,
+        user: payload,
+        error: null,
+      }));
+    };
+
+    window.addEventListener('message', handleMessage);
+    let intervalId = null;
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
+        window.parent.postMessage({ type: 'senai_request_moodle_token' }, '*');
+        window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_USER' }, '*');
+        window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_TOKEN' }, '*');
+        // Reforça a solicitação por alguns segundos para lidar com carregamento assíncrono do Moodle.
+        intervalId = window.setInterval(() => {
+          if (getToken()) {
+            window.clearInterval(intervalId);
+            return;
+          }
+          window.parent.postMessage({ type: 'senai_request_moodle_user' }, '*');
+          window.parent.postMessage({ type: 'senai_request_moodle_token' }, '*');
+          window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_USER' }, '*');
+          window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_TOKEN' }, '*');
+        }, 2000);
+        window.setTimeout(() => {
+          if (intervalId) {
+            window.clearInterval(intervalId);
+          }
+        }, 15000);
+      }
+    } catch (error) {
+      console.warn('Falha ao solicitar moodle_user via postMessage:', error);
+    }
+
+    return () => {
+      window.removeEventListener('message', handleMessage);
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, []);
+
+  if (authState.loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto mb-4" />
+          <p className="text-gray-600">Validando sessao...</p>
+        </div>
+      </div>
+    );
+  }
+
+
+  if (!authState.authenticated) {
+    const existingUser = getMoodleUser();
+    const hasAccessToken = !!getToken();
+    const { token: moodleToken } = getMoodleTokenFromURL();
+    const isEmbedded = window.parent && window.parent !== window;
+    if (
+      hasAccessToken &&
+      existingUser &&
+      (existingUser.userId || existingUser.userName || existingUser.userEmail) &&
+      existingUser.userId !== 'guest'
+    ) {
+      return children;
+    }
+
+    if (isEmbedded) {
+      const shouldShowSyncing =
+        Boolean(moodleToken) && !authState.error;
+
+      if (shouldShowSyncing) {
+        return (
+          <div className="min-h-screen flex items-center justify-center bg-gray-50">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-orange-500 mx-auto mb-3" />
+              <p className="text-gray-600">Sincronizando sessao do Moodle...</p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+          <div className="text-center max-w-sm">
+            <p className="text-gray-700 font-medium">Sessao do Moodle indisponivel.</p>
+            <p className="text-gray-500 text-sm mt-1">Reabra o chat pelo Moodle para gerar um novo token.</p>
+          </div>
+        </div>
+      );
+    }
+
+    const persistedMoodleContext =
+      (() => {
+        try {
+          return sessionStorage.getItem(MOODLE_CONTEXT_KEY) === '1';
+        } catch (_error) {
+          return false;
+        }
+      })();
+
+    const hasMoodleRouteParams =
+      window.location.search.includes('session_id=') ||
+      window.location.search.includes('active_chat_id=') ||
+      window.location.search.includes('chat_id=');
+
+    const isMoodleContext =
+      Boolean(moodleToken) ||
+      window.location.search.includes('origin=moodle') ||
+      hasMoodleRouteParams ||
+      persistedMoodleContext;
+
+    const hasExplicitMoodleAuth =
+      Boolean(moodleToken) ||
+      window.location.search.includes('origin=moodle');
+
+    if (isMoodleContext && (!isDevLoginEnabled || hasExplicitMoodleAuth)) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+          <div className="text-center max-w-sm">
+            <p className="text-gray-700 font-medium">Sessao do Moodle indisponivel.</p>
+            <p className="text-gray-500 text-sm mt-1">Reabra o chat pelo Moodle para gerar um novo token.</p>
+          </div>
+        </div>
+      );
+    }
+
+    if (isDevLoginEnabled) {
+      return (
+        <DevLogin
+          onSuccess={(userData) => {
+            storeMoodleUser(userData);
+            setAuthState({
+              loading: false,
+              authenticated: true,
+              user: userData,
+              error: null,
+            });
+          }}
+        />
+      );
+    }
+
+    storeMoodleUser({
+      userId: 'guest',
+      userName: 'Visitante',
+      fromMoodle: false,
+    });
+    return children;
+  }
+
+  return children;
+}
+
+export default MoodleAuthWrapper;

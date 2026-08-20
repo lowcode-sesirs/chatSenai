@@ -1,0 +1,2650 @@
+﻿import { useState, useEffect, useRef } from 'react';
+import { useLocation, useParams } from 'react-router-dom';
+import { ArrowDown, Pencil, Square } from 'lucide-react';
+import { startChat, sendChatMessage, getChatStream, sendFeedback, getChatHistory, loadChat, renameChat, saveChat, deleteChat, getKnowledgeContexts } from '../services/chatService';
+import { clearMoodleUser, getMoodleUser } from '../services/moodleAuthService';
+import { clearToken } from '../services/tokenStore';
+import AIMessageContent from '../components/AIMessageContent';
+import HistorySidebar from '../components/HistorySidebar';
+import useMoodleBridge from '../hooks/useMoodleBridge';
+import historicoIcon from '../assets/historico.png';
+import questionIcon from '../assets/question.png';
+import suportiaLogo from '../assets/suportia-logo.png';
+import vectorLogo from '../assets/button-cursor.svg';
+import suportiaWordmark from '../assets/suportia-wordmark.png';
+import likeIcon from '../assets/like.png';
+import dislikeIcon from '../assets/thumb_down_alt.png';
+import sendIcon from '../assets/Send.solid.png';
+import copiarIcon from '../assets/copiar.png';
+import novaConversaIcon from '../assets/novaConversa.png';
+
+const MOODLE_PARENT_ORIGIN = 'https://pocsesi-rs.asdnet.com.br';
+const DEFAULT_KNOWLEDGE_CONTEXT_CODE = import.meta.env.VITE_DEFAULT_KNOWLEDGE_CONTEXT_CODE || '';
+const CURRENT_MOODLE_COURSE_KEY = 'senai_moodle_current_course';
+const ROUTE_COURSE_CONFIG = {
+  'gestao-exames': {
+    knowledgeContextCode: 'default',
+    courseExternalId: 'gestao-exames',
+    courseName: 'Gestão de Exames',
+  },
+  'curso-local': {
+    knowledgeContextCode: 'default',
+    courseExternalId: 'curso-local-01',
+    courseName: 'Curso Local',
+  },
+};
+
+const resolveRouteCourseContext = (courseSlug) => {
+  if (!courseSlug) return null;
+  const normalizedSlug = String(courseSlug).trim();
+  if (!normalizedSlug) return null;
+
+  return ROUTE_COURSE_CONFIG[normalizedSlug] || {
+    knowledgeContextCode: 'default',
+    courseExternalId: normalizedSlug,
+    courseName: normalizedSlug,
+  };
+};
+
+const readDevCourseContextFromUrl = () => {
+  if (!import.meta.env.DEV || typeof window === 'undefined') return null;
+
+  const params = new URLSearchParams(window.location.search);
+  const courseExternalId =
+    params.get('dev_course_external_id') ||
+    params.get('dev_courseExternalId') ||
+    params.get('dev_course');
+
+  if (!courseExternalId) return null;
+
+  return normalizeMoodleCourseContext({
+    courseExternalId,
+    courseId: params.get('dev_course_id'),
+    courseName: params.get('dev_course_name') || courseExternalId,
+  });
+};
+
+const normalizeMoodleCourseContext = (value) => {
+  if (!value || typeof value !== 'object') return null;
+
+  const source = value.payload && typeof value.payload === 'object'
+    ? value.payload
+    : value;
+
+  const courseExternalId =
+    source.courseExternalId ||
+    source.course_external_id ||
+    source.externalCourseId ||
+    source.external_course_id ||
+    source.courseShortName ||
+    source.shortname ||
+    source.course_shortname ||
+    null;
+  const courseId =
+    source.courseId ||
+    source.course_id ||
+    source.moodleCourseId ||
+    source.moodle_course_id ||
+    null;
+  const courseName =
+    source.courseName ||
+    source.courseFullName ||
+    source.fullname ||
+    source.course_fullname ||
+    source.name ||
+    null;
+
+  if (!courseExternalId && !courseId && !courseName) return null;
+
+  return {
+    courseExternalId: courseExternalId ? String(courseExternalId).trim() : null,
+    courseId: courseId ? String(courseId).trim() : null,
+    courseName: courseName ? String(courseName).trim() : null,
+    updatedAt: Date.now(),
+  };
+};
+
+const readStoredMoodleCourseContext = () => {
+  try {
+    const devContext = readDevCourseContextFromUrl();
+    if (devContext) return devContext;
+
+    const runtimeContext =
+      normalizeMoodleCourseContext(typeof window !== 'undefined' ? window.__MOODLE_CONTEXT__ : null) ||
+      normalizeMoodleCourseContext(typeof window !== 'undefined' ? window.__MOODLE_COURSE__ : null) ||
+      normalizeMoodleCourseContext(typeof window !== 'undefined' ? window.__MOODLE_USER__ : null);
+    if (runtimeContext) return runtimeContext;
+
+    const stored = sessionStorage.getItem(CURRENT_MOODLE_COURSE_KEY);
+    return stored ? normalizeMoodleCourseContext(JSON.parse(stored)) : null;
+  } catch (_error) {
+    return null;
+  }
+};
+
+function Welcome() {
+  const location = useLocation();
+  const { courseSlug } = useParams();
+  const routeCourseContext = resolveRouteCourseContext(courseSlug);
+  const routeKnowledgeContextCode = routeCourseContext?.knowledgeContextCode || null;
+  const [message, setMessage] = useState('');
+  const [moodleUser, setMoodleUser] = useState(() => getMoodleUser());
+  const [chatTitle, setChatTitle] = useState('');
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [pendingTitleRename, setPendingTitleRename] = useState(false);
+  const [knowledgeContexts, setKnowledgeContexts] = useState([]);
+  const [selectedKnowledgeContextCode, setSelectedKnowledgeContextCode] = useState(routeKnowledgeContextCode || DEFAULT_KNOWLEDGE_CONTEXT_CODE);
+  const [currentMoodleCourseContext, setCurrentMoodleCourseContext] = useState(() => routeCourseContext || readStoredMoodleCourseContext());
+  const [isLoadingKnowledgeContexts, setIsLoadingKnowledgeContexts] = useState(false);
+  const [knowledgeContextError, setKnowledgeContextError] = useState('');
+  // Função para gerar UUID v4 válido
+  const generateUUID = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  };
+
+  const [sessionId, setSessionId] = useState(generateUUID()); // ID único da sessão (UUID)
+  const [currentChatId, setCurrentChatId] = useState(null); // ID do chat atual (se carregado do histórico)
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
+  const [isExpandedOverlayOpen, setIsExpandedOverlayOpen] = useState(false);
+  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
+  const [, setRelativeTimeTick] = useState(0);
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      type: 'ai',
+      text: 'Olá! Eu sou a SESI SuportIA, sua parceira de estudo.',
+      isWelcome: true,
+      timestamp: new Date(),
+      messageId: 'welcome-msg'
+    }
+  ]);
+  const [feedbackGiven, setFeedbackGiven] = useState({}); // Rastreia feedback dado por messageId
+  const [copiedMessages, setCopiedMessages] = useState({}); // Rastreia mensagens copiadas
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  // deletados são tratados pelo backend
+  const messagesEndRef = useRef(null);
+  const mainScrollRef = useRef(null);
+  const ACTIVE_CHAT_ID_KEY = 'activeChatId';
+  const ACTIVE_CHAT_DRAFT_KEY = 'activeChatDraft';
+  const CHAT_SNAPSHOT_PREFIX = 'chatSnapshot:';
+  const PENDING_EXPAND_CHAT_ID_KEY = 'pendingExpandChatId';
+  const PENDING_EXPAND_CHAT_DRAFT_KEY = 'pendingExpandChatDraft';
+  const latestActiveChatRef = useRef(null);
+  const latestIsDraftRef = useRef(false);
+
+  const removeLegacyActiveChatState = () => {
+    try {
+      localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+      localStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+      localStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+    } catch (_error) {
+      // noop
+    }
+  };
+
+  const clearStoredChatSnapshots = () => {
+    try {
+      const sessionKeysToRemove = [];
+      for (let index = 0; index < sessionStorage.length; index += 1) {
+        const key = sessionStorage.key(index);
+        if (key?.startsWith(CHAT_SNAPSHOT_PREFIX)) {
+          sessionKeysToRemove.push(key);
+        }
+      }
+      sessionKeysToRemove.forEach((key) => sessionStorage.removeItem(key));
+
+      const localKeysToRemove = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key?.startsWith(CHAT_SNAPSHOT_PREFIX)) {
+          localKeysToRemove.push(key);
+        }
+      }
+      localKeysToRemove.forEach((key) => localStorage.removeItem(key));
+    } catch (_error) {
+      // noop
+    }
+  };
+
+  useMoodleBridge({
+    moodleOrigin: import.meta.env.VITE_MOODLE_ORIGIN || MOODLE_PARENT_ORIGIN,
+    onChatExpanded: () => setIsExpandedOverlayOpen(true),
+  });
+
+  useEffect(() => {
+    const applyCourseContext = (value) => {
+      if (routeCourseContext) return;
+      const normalizedContext = normalizeMoodleCourseContext(value);
+      if (!normalizedContext) return;
+
+      setCurrentMoodleCourseContext(normalizedContext);
+      try {
+        sessionStorage.setItem(CURRENT_MOODLE_COURSE_KEY, JSON.stringify(normalizedContext));
+      } catch (_error) {
+        // noop
+      }
+    };
+
+    applyCourseContext(typeof window !== 'undefined' ? window.__MOODLE_CONTEXT__ : null);
+    applyCourseContext(typeof window !== 'undefined' ? window.__MOODLE_COURSE__ : null);
+    applyCourseContext(typeof window !== 'undefined' ? window.__MOODLE_USER__ : null);
+
+    const handleCourseContextMessage = (event) => {
+      const data = event?.data;
+      const type = String(data?.type || '');
+      if (![
+        'SENAI_MOODLE_COURSE_CONTEXT',
+        'senai_moodle_course_context',
+        'MOODLE_COURSE_CONTEXT',
+        'senai_moodle_user',
+        'SENAI_MOODLE_USER',
+      ].includes(type)) {
+        return;
+      }
+
+      applyCourseContext(data?.payload || data);
+    };
+
+    window.addEventListener('message', handleCourseContextMessage);
+
+    let intervalId = null;
+    try {
+      if (window.parent && window.parent !== window) {
+        const requestCourseContext = () => {
+          window.parent.postMessage({ type: 'senai_request_moodle_course_context' }, '*');
+          window.parent.postMessage({ type: 'SENAI_REQUEST_MOODLE_COURSE_CONTEXT' }, '*');
+        };
+        requestCourseContext();
+        intervalId = window.setInterval(requestCourseContext, 2000);
+        window.setTimeout(() => {
+          if (intervalId) {
+            window.clearInterval(intervalId);
+            intervalId = null;
+          }
+        }, 15000);
+      }
+    } catch (_error) {
+      // noop
+    }
+
+    return () => {
+      window.removeEventListener('message', handleCourseContextMessage);
+      if (intervalId) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [courseSlug]);
+
+  useEffect(() => {
+    if (routeCourseContext) return;
+    const devContext = readDevCourseContextFromUrl();
+    if (!devContext) return;
+
+    setCurrentMoodleCourseContext(devContext);
+    try {
+      sessionStorage.setItem(CURRENT_MOODLE_COURSE_KEY, JSON.stringify(devContext));
+    } catch (_error) {
+      // noop
+    }
+  }, [location.search, courseSlug]);
+
+  useEffect(() => {
+    if (!routeCourseContext) return;
+
+    setSelectedKnowledgeContextCode(routeCourseContext.knowledgeContextCode);
+    setCurrentMoodleCourseContext({
+      courseExternalId: routeCourseContext.courseExternalId,
+      courseName: routeCourseContext.courseName,
+      updatedAt: Date.now(),
+    });
+    setKnowledgeContextError('');
+  }, [courseSlug]);
+
+  const buildExpandedChatParams = (chatId, isDraft = false) => {
+    const params = new URLSearchParams();
+    if (chatId) {
+      params.set('active_chat_id', chatId);
+      params.set('chat_id', chatId);
+      params.set('session_id', chatId);
+    }
+    if (isDraft) {
+      params.set('active_chat_draft', '1');
+    }
+    return params.toString();
+  };
+
+  const saveActiveChatState = (chatId, isDraft = false) => {
+    if (!chatId) return;
+    try {
+      sessionStorage.setItem(ACTIVE_CHAT_ID_KEY, chatId);
+      sessionStorage.setItem(ACTIVE_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      sessionStorage.setItem(PENDING_EXPAND_CHAT_ID_KEY, chatId);
+      sessionStorage.setItem(PENDING_EXPAND_CHAT_DRAFT_KEY, isDraft ? '1' : '0');
+      removeLegacyActiveChatState();
+      syncActiveChatInUrl(chatId, isDraft);
+      if (window.parent && window.parent !== window) {
+        const expandedParams = buildExpandedChatParams(chatId, isDraft);
+        const expandedUrl = `${window.location.origin}${window.location.pathname}?${expandedParams}`;
+        const payload = {
+          type: 'senai_active_chat',
+          chatId,
+          active_chat_id: chatId,
+          chat_id: chatId,
+          session_id: chatId,
+          expanded_chat_params: expandedParams,
+          expanded_chat_url: expandedUrl,
+          currentChatId: chatId,
+          isDraft
+        };
+        window.parent.postMessage(payload, MOODLE_PARENT_ORIGIN);
+        // Compatibilidade com integrações antigas do widget maximizado.
+        window.parent.postMessage({ ...payload, type: 'senai_set_active_chat' }, MOODLE_PARENT_ORIGIN);
+      }
+    } catch (error) {
+      console.warn('Falha ao salvar estado do chat ativo:', error);
+    }
+  };
+
+  const syncActiveChatInUrl = (chatId, isDraft = false) => {
+    try {
+      const url = new URL(window.location.href);
+      if (chatId) {
+        url.searchParams.set('active_chat_id', chatId);
+        url.searchParams.set('chat_id', chatId);
+        url.searchParams.set('session_id', chatId);
+      } else {
+        url.searchParams.delete('active_chat_id');
+        url.searchParams.delete('chat_id');
+        url.searchParams.delete('session_id');
+      }
+      if (isDraft) {
+        url.searchParams.set('active_chat_draft', '1');
+      } else {
+        url.searchParams.delete('active_chat_draft');
+      }
+      const nextRoute = `${url.pathname}${url.search}${url.hash || ''}`;
+      window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+      try {
+        window.dispatchEvent(new CustomEvent('senai_route_sync', { detail: { route: nextRoute } }));
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: 'CHAT_ROUTE_UPDATE', route: nextRoute }, MOODLE_PARENT_ORIGIN);
+        }
+      } catch (_error) {
+        // noop
+      }
+    } catch (error) {
+      console.warn('Falha ao sincronizar active_chat_id na URL:', error);
+    }
+  };
+
+  const clearActiveChatState = () => {
+    try {
+      sessionStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+      sessionStorage.removeItem(ACTIVE_CHAT_DRAFT_KEY);
+      sessionStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);  
+      sessionStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+      removeLegacyActiveChatState();
+      syncActiveChatInUrl(null, false);
+    } catch (error) {
+      console.warn('Falha ao limpar estado do chat ativo:', error);
+    }
+  };
+
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    const activeChatId = currentChatId || sessionId || null;
+    latestActiveChatRef.current = activeChatId;
+    latestIsDraftRef.current = !hasUserMessages;
+  }, [messages, currentChatId, sessionId]);
+
+  useEffect(() => {
+    const activeChatId = currentChatId || sessionId || null;
+    if (!activeChatId) return;
+    try {
+      const snapshot = {
+        chatId: activeChatId,
+        title: chatTitle || '',
+        knowledgeContextCode: selectedKnowledgeContextCode || '',
+        moodleCourseContext: currentMoodleCourseContext,
+        messages,
+        updatedAt: Date.now()
+      };
+      sessionStorage.setItem(`${CHAT_SNAPSHOT_PREFIX}${activeChatId}`, JSON.stringify(snapshot));
+      localStorage.removeItem(`${CHAT_SNAPSHOT_PREFIX}${activeChatId}`);
+    } catch (_error) {
+      // noop
+    }
+  }, [messages, currentChatId, sessionId, chatTitle, selectedKnowledgeContextCode, currentMoodleCourseContext]);
+
+  useEffect(() => {
+    removeLegacyActiveChatState();
+  }, []);
+
+  useEffect(() => {
+    const handleParentExpandSync = (event) => {
+      const type = event?.data?.type;
+      if (!type) return;
+      if (
+        ![
+          'senai_request_active_chat',
+          'senai_before_expand',
+          'senai_expand_clicked',
+          'MOODLE_CHAT_EXPAND_CLICKED'
+        ].includes(type)
+      ) {
+        return;
+      }
+
+      const chatId = latestActiveChatRef.current;
+      const isDraft = !!latestIsDraftRef.current;
+      if (!chatId) return;
+
+      saveActiveChatState(chatId, isDraft);
+    };
+
+    window.addEventListener('message', handleParentExpandSync);
+    return () => window.removeEventListener('message', handleParentExpandSync);
+  }, []);
+
+  // Scroll automático para o final quando novas mensagens chegam
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    if (!hasUserMessages) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const updateScrollToBottomButton = () => {
+    const container = mainScrollRef.current;
+    if (!container) return;
+    const threshold = 24;
+    const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    setShowScrollToBottom(distanceToBottom > threshold);
+  };
+
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    if (!hasUserMessages) {
+      setShowScrollToBottom(false);
+      return;
+    }
+    const rafId = requestAnimationFrame(() => {
+      updateScrollToBottomButton();
+    });
+    return () => cancelAnimationFrame(rafId);
+  }, [messages]);
+
+  const handleScrollMain = () => {
+    updateScrollToBottomButton();
+  };
+
+  const handleScrollToBottom = () => {
+    const container = mainScrollRef.current;
+    if (container?.scrollTo) {
+      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
+
+  useEffect(() => {
+    const updateMoodleUser = () => {
+      const latestUser = getMoodleUser();
+      setMoodleUser(latestUser);
+      const latestCourseContext = normalizeMoodleCourseContext(latestUser);
+      if (latestCourseContext) {
+        setCurrentMoodleCourseContext(latestCourseContext);
+        try {
+          sessionStorage.setItem(CURRENT_MOODLE_COURSE_KEY, JSON.stringify(latestCourseContext));
+        } catch (_error) {
+          // noop
+        }
+      }
+    };
+    updateMoodleUser();
+    window.addEventListener('moodle_user_updated', updateMoodleUser);
+    let attempts = 0;
+    const retryLoad = () => {
+      const latest = getMoodleUser();
+      if (latest && (latest.userName || latest.userId || latest.userEmail)) {
+        setMoodleUser(latest);
+        return;
+      }
+      attempts += 1;
+      if (attempts < 6) {
+        setTimeout(retryLoad, 500);
+      }
+    };
+    retryLoad();
+    return () => {
+      window.removeEventListener('moodle_user_updated', updateMoodleUser);
+    };
+  }, []);
+
+  const getDisplayUserName = (user) => {
+    const name =
+      user?.userName ||
+      user?.fullname ||
+      user?.user_name ||
+      user?.username ||
+      user?.name ||
+      (typeof window !== 'undefined' && window.__MOODLE_USER__ &&
+        (window.__MOODLE_USER__.userName ||
+          window.__MOODLE_USER__.fullname ||
+          window.__MOODLE_USER__.user_name ||
+          window.__MOODLE_USER__.username ||
+          window.__MOODLE_USER__.name));
+    if (typeof name === 'string' && name.trim()) return name.trim();
+    if (name) return String(name);
+    return 'Aluno';
+  };
+
+  const hasUserMessages = messages.some((msg) => msg.type === 'user');
+  const chatInputPlaceholder = hasUserMessages
+    ? 'Pergunte qualquer coisa'
+    : 'No que posso te ajudar hoje?';
+  const displayChatTitle = hasUserMessages
+    ? ((chatTitle || '').trim() || 'Sem titulo')
+    : 'Chat sem título';
+  const loadKnowledgeContexts = async () => {
+    setIsLoadingKnowledgeContexts(true);
+    setKnowledgeContextError('');
+    try {
+      const contexts = await getKnowledgeContexts();
+      const activeContexts = contexts.filter((context) => !context.status || context.status === 'active');
+      setKnowledgeContexts(activeContexts);
+
+      if (activeContexts.length === 0) {
+        setSelectedKnowledgeContextCode('');
+        setKnowledgeContextError('Nenhuma base de conhecimento ativa foi encontrada.');
+        return;
+      }
+
+      const fixedRouteContextCode = routeCourseContext?.knowledgeContextCode || null;
+      const preferredContext =
+        activeContexts.find((context) => context.code === fixedRouteContextCode) ||
+        activeContexts.find((context) => context.code === selectedKnowledgeContextCode) ||
+        activeContexts.find((context) => context.code === DEFAULT_KNOWLEDGE_CONTEXT_CODE) ||
+        activeContexts.find((context) => context.code === 'default') ||
+        activeContexts[0];
+
+      setSelectedKnowledgeContextCode(preferredContext.code);
+    } catch (error) {
+      console.error('Erro ao carregar contextos de conhecimento:', error);
+      setKnowledgeContextError('Nao foi possivel carregar as bases de conhecimento. Tente novamente.');
+    } finally {
+      setIsLoadingKnowledgeContexts(false);
+    }
+  };
+
+  useEffect(() => {
+    loadKnowledgeContexts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!selectedKnowledgeContextCode) return;
+    if (routeCourseContext) return;
+    const contextExists = knowledgeContexts.some((context) => context.code === selectedKnowledgeContextCode);
+    if (knowledgeContexts.length > 0 && !contextExists) {
+      setSelectedKnowledgeContextCode(knowledgeContexts[0].code);
+    }
+  }, [selectedKnowledgeContextCode, knowledgeContexts, courseSlug]);
+
+  const getFriendlyChatErrorMessage = (error) => {
+    const errorText = String(error?.message || error?.body?.error || error?.body?.detail || '');
+
+    if (
+      errorText.includes('oauth2.googleapis.com') ||
+      errorText.includes('Failed to establish a new connection') ||
+      errorText.includes('WinError 10013')
+    ) {
+      return 'Nao foi possivel gerar a resposta agora porque o backend nao conseguiu acessar o servico de IA. Verifique as credenciais/conexao do backend e tente novamente.';
+    }
+
+    if (error?.status === 404) {
+      return 'A base de conhecimento selecionada nao foi encontrada. Atualize a lista e selecione outra base.';
+    }
+
+    if (error?.status === 409) {
+      return 'A base de conhecimento selecionada esta inativa no momento. Selecione outra base ou tente novamente mais tarde.';
+    }
+
+    if (error?.status === 400) {
+      return 'Nao foi possivel iniciar o chat com a base de conhecimento selecionada. Atualize a lista e tente novamente.';
+    }
+
+    return null;
+  };
+
+  const matchChatToUser = (chat, user) => {
+    if (!chat || !user) return false;
+    const userId = user.userId ?? user.id ?? null;
+    const userEmail = user.userEmail ?? user.email ?? null;
+    const userName = user.userName ?? user.fullname ?? user.username ?? null;
+
+    const chatFields = [
+      chat.user_id,
+      chat.userId,
+      chat.user,
+      chat.user_email,
+      chat.userEmail,
+      chat.email,
+      chat.user_name,
+      chat.userName,
+      chat.username,
+      chat.x_dev_user,
+      chat.xDevUser,
+      chat.dev_user,
+      chat.devUser,
+      chat.owner_id,
+      chat.ownerId,
+      chat.created_by,
+      chat.createdBy
+    ].filter((value) => value !== undefined && value !== null);
+
+    if (chatFields.length === 0) return false;
+
+    return chatFields.some((value) => {
+      if (userId !== null && String(value) === String(userId)) return true;
+      if (userEmail && String(value).toLowerCase() === String(userEmail).toLowerCase()) return true;
+      if (userName && String(value).toLowerCase() === String(userName).toLowerCase()) return true;
+      return false;
+    });
+  };
+
+
+  // Função para carregar histórico (lazy loading)
+  const loadHistory = async (forceReload = false) => {
+    // Se já carregou e não é reload forçado, não recarrega
+    if (historyLoaded && !forceReload) return;
+    
+    setIsLoadingHistory(true);
+    try {
+      console.log('ðŸ”„ Carregando histórico de conversas...');
+      const history = await getChatHistory();
+      
+      // Verifica se recebeu dados válidos
+      if (Array.isArray(history)) {
+        console.log('ðŸ“š Histórico carregado da API:', history.length, 'conversas');
+        
+        // Debug: Verificar estrutura de cada chat (apenas se tiver dados)
+        if (history.length > 0) {
+          console.log('ðŸ” Estrutura do primeiro chat:', history[0]);
+          console.log('ðŸ” Campos disponíveis:', Object.keys(history[0]));
+        }
+        
+        const filteredHistory = history;
+        
+        const sortedHistory = filteredHistory.sort((a, b) => {
+          const dateA = new Date(a.updated_at || a.created_at || 0);
+          const dateB = new Date(b.updated_at || b.created_at || 0);
+          return dateB - dateA;
+        });
+        
+        setChatHistory(sortedHistory);
+        setHistoryLoaded(true);
+        console.log('âœ… Histórico carregado e ordenado com sucesso!');
+      } else {
+        console.log('âš ï¸ Histórico retornado não é um array, usando array vazio');
+        setChatHistory([]);
+        setHistoryLoaded(true);
+      }
+    } catch (error) {
+      console.error('âŒ Erro ao carregar histórico:', error.message);
+      
+      // Define histórico vazio em caso de erro
+      setChatHistory([]);
+      
+      // Marca como carregado mesmo com erro para evitar loops infinitos
+      setHistoryLoaded(true);
+      
+      // Log adicional para debug
+      console.log('ðŸ”„ Histórico definido como vazio devido ao erro');
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Função para recarregar histórico manualmente
+  const handleRefreshHistory = () => {
+    loadHistory(true);
+  };
+
+  // Função para limpar lista de chats deletados (debug/reset)
+  const clearDeletedChats = () => {
+    console.log('ðŸ§¹ Lista de chats deletados localmente desativada');
+    loadHistory(true);
+  };
+
+  // Função para formatar tempo relativo (ex: "há 2 minutos", "há 1 hora")
+const formatRelativeTime = (timestamp) => {
+    if (!timestamp) return 'Agora';
+    
+    const now = new Date();
+    const messageTime = new Date(timestamp);
+    const diffInSeconds = Math.floor((now - messageTime) / 1000);
+    
+    if (diffInSeconds < 60) {
+      return 'Agora';
+    } else if (diffInSeconds < 3600) { // menos de 1 hora
+      const minutes = Math.floor(diffInSeconds / 60);
+      return `há ${minutes} ${minutes === 1 ? 'minuto' : 'minutos'}`;
+    } else if (diffInSeconds < 86400) { // menos de 24 horas
+      const hours = Math.floor(diffInSeconds / 3600);
+      return `há ${hours} ${hours === 1 ? 'hora' : 'horas'}`;
+    } else if (diffInSeconds < 2592000) { // menos de 30 dias
+      const days = Math.floor(diffInSeconds / 86400);
+      return `há ${days} ${days === 1 ? 'dia' : 'dias'}`;
+    } else {
+      // Para mensagens muito antigas, mostra a data
+      const day = messageTime.getDate().toString().padStart(2, '0');
+      const month = (messageTime.getMonth() + 1).toString().padStart(2, '0');
+      const year = messageTime.getFullYear();
+      return `${day}/${month}/${year}`;
+    }
+};
+
+const normalizeMessageForDisplay = (value) => {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/\n\s*\n+/g, '\n')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+};
+
+  // Removido: carregamento de chats deletados do localStorage
+
+  // Carregar histórico automaticamente ao iniciar a aplicação (com delay)
+  useEffect(() => {
+    // Adiciona um pequeno delay para evitar múltiplas chamadas simultâneas
+    const timeoutId = setTimeout(() => {
+      loadHistory();
+    }, 1000); // 1 segundo de delay
+    
+    return () => clearTimeout(timeoutId);
+  }, []); // Executa apenas uma vez ao montar o componente
+
+  // Atualizar tempos relativos a cada minuto
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Força re-render para atualizar os tempos relativos sem alterar messages
+      setRelativeTimeTick((prev) => prev + 1);
+    }, 60000); // Atualiza a cada 60 segundos
+
+    return () => clearInterval(interval);
+  }, []);
+
+  // Função para calcular diferença de tempo e gerar separadores
+  const getTimeSeparator = (currentMsg, previousMsg) => {
+    if (!previousMsg) return null;
+    
+    const currentTime = new Date(currentMsg.timestamp);
+    const previousTime = new Date(previousMsg.timestamp);
+    const diffInMinutes = Math.floor((currentTime - previousTime) / (1000 * 60));
+    
+    // Só mostra separador se passou mais de 5 minutos
+    if (diffInMinutes >= 5) {
+      if (diffInMinutes < 60) {
+        return `HÁ ${diffInMinutes} MINUTOS`;
+      } else if (diffInMinutes < 1440) { // menos de 24 horas
+        const hours = Math.floor(diffInMinutes / 60);
+        return `HÁ ${hours} ${hours === 1 ? 'HORA' : 'HORAS'}`;
+      } else {
+        const days = Math.floor(diffInMinutes / 1440);
+        return `HÁ ${days} ${days === 1 ? 'DIA' : 'DIAS'}`;
+      }
+    }
+    
+    return null;
+  };
+
+  // Função para renderizar separador de tempo
+  const renderTimeSeparator = (text) => (
+    <div className="flex items-center justify-center my-6">
+      <div className="flex-1 h-px bg-gray-300"></div>
+      <span className="px-4 text-xs font-medium text-gray-400 uppercase tracking-wider">
+        {text}
+      </span>
+      <div className="flex-1 h-px bg-gray-300"></div>
+    </div>
+  );
+
+  // Carregar histórico quando abrir o sidebar (se ainda não foi carregado)
+  useEffect(() => {
+    if (isHistoryOpen && !historyLoaded) {
+      loadHistory();
+    }
+  }, [isHistoryOpen]);
+
+  // Sempre prioriza o título vindo do backend.
+  const generateCorrectTitle = (chat) => {
+    const backendTitle = chat?.title;
+    if (typeof backendTitle === 'string' && backendTitle.trim()) {
+      return backendTitle.trim();
+    }
+    return 'Sem titulo';
+  };
+
+  const getChatIdentifier = (chat) => {
+    if (!chat) return null;
+    // Prioriza o identificador de sessão (UUID) vindo do backend.
+    return chat.session_id || chat.chat_id || chat.id || null;
+  };
+
+  const syncKnowledgeSelectionFromChat = (chatData, fallbackChat = null) => {
+    if (routeCourseContext) {
+      setSelectedKnowledgeContextCode(routeCourseContext.knowledgeContextCode);
+      setCurrentMoodleCourseContext({
+        courseExternalId: routeCourseContext.courseExternalId,
+        courseName: routeCourseContext.courseName,
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+
+    const contextCode =
+      chatData?.knowledge_context_code ||
+      chatData?.knowledgeContextCode ||
+      fallbackChat?.knowledge_context_code ||
+      fallbackChat?.knowledgeContextCode ||
+      null;
+
+    if (typeof contextCode === 'string' && contextCode.trim()) {
+      setSelectedKnowledgeContextCode(contextCode.trim());
+    }
+
+    const courseContext =
+      normalizeMoodleCourseContext(chatData?.moodle_course_context || chatData?.moodleCourseContext) ||
+      normalizeMoodleCourseContext(fallbackChat?.moodle_course_context || fallbackChat?.moodleCourseContext) ||
+      normalizeMoodleCourseContext(chatData) ||
+      normalizeMoodleCourseContext(fallbackChat);
+
+    if (courseContext) {
+      setCurrentMoodleCourseContext(courseContext);
+      try {
+        sessionStorage.setItem(CURRENT_MOODLE_COURSE_KEY, JSON.stringify(courseContext));
+      } catch (_error) {
+        // noop
+      }
+    }
+  };
+
+  const extractMessagesFromChatData = (chatData, fallbackChat) => {
+    if (chatData.messages && Array.isArray(chatData.messages)) {
+      return chatData.messages;
+    }
+
+    if (chatData.history && Array.isArray(chatData.history)) {
+      return chatData.history;
+    }
+
+    if (chatData.conversation && Array.isArray(chatData.conversation)) {
+      return chatData.conversation;
+    }
+
+    if (chatData.data && chatData.data.messages && Array.isArray(chatData.data.messages)) {
+      return chatData.data.messages;
+    }
+
+    if (fallbackChat && fallbackChat.messages && Array.isArray(fallbackChat.messages)) {
+      console.log('Usando mensagens do historico como fallback');
+      return fallbackChat.messages;
+    }
+
+    return [];
+  };
+
+  const normalizeMediaUrl = (value) => {
+    if (!value || typeof value !== 'string') return value;
+    let url = value.trim();
+    // Remove aspas no fim ou no começo (incluindo %22)
+    url = url.replace(/^"+|"+$/g, '');
+    url = url.replace(/^%22|%22$/gi, '');
+    return url;
+  };
+
+  const coercePayloadObject = (value) => {
+    if (!value) return null;
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        console.warn('Falha ao parsear payload JSON:', error);
+        return null;
+      }
+    }
+    return value;
+  };
+
+  const getTargetPage = (doc) => {
+    const direct = Number(doc?.target_page ?? doc?.targetPage);
+    if (Number.isFinite(direct) && direct > 0) return Math.floor(direct);
+
+    const pagesValue = String(doc?.pages || '');
+    const firstMatch = pagesValue.match(/\d+/);
+    if (firstMatch) return Number(firstMatch[0]);
+
+    const linkValue = String(doc?.Link || doc?.link || '');
+    const pageParam = linkValue.match(/[?&]page=(\d+)/i);
+    if (pageParam) return Number(pageParam[1]);
+
+    return 1;
+  };
+
+  const getContentSourceId = (doc) => {
+    if (doc?.id !== undefined && doc?.id !== null) return String(doc.id);
+    const linkValue = String(doc?.Link || doc?.link || '');
+    const contentMatch = linkValue.match(/\/viewer\/([^/?#]+)/i);
+    if (contentMatch?.[1]) return contentMatch[1];
+    return null;
+  };
+
+  const normalizeReference = (ref) => {
+    const contentSourceId = getContentSourceId(ref) || ref?.contentSourceId || ref?.content_source_id || null;
+    return {
+      ...ref,
+      id: ref?.id || contentSourceId,
+      contentSourceId,
+      source: ref?.source || ref?.name || ref?.title || ref?.id || 'Fonte',
+      page: ref?.page || ref?.pages,
+      targetPage: getTargetPage(ref),
+      link: normalizeMediaUrl(ref?.link || ref?.Link || ref?.url),
+    };
+  };
+
+  const formatMessagesForUI = (messagesToLoad) => {
+    return messagesToLoad.map((msg, index) => {
+      let messageType = 'ai';
+      if (msg.type) {
+        messageType = msg.type;
+      } else if (msg.sender) {
+        messageType = msg.sender;
+      } else if (msg.role) {
+        messageType = msg.role === 'user' ? 'user' : 'ai';
+      } else if (msg.is_user || msg.isUser) {
+        messageType = 'user';
+      }
+
+      const messageText = msg.text || msg.content || msg.message || msg.response || '';
+      const sourcesPayload = coercePayloadObject(
+        msg.sources_payload || msg.sourcesPayload || msg.sources
+      );
+      const mediaPayload = coercePayloadObject(
+        msg.media_payload || msg.mediaPayload || msg.media_payloads || msg.mediaPayloads || msg.media
+      );
+
+      let references = Array.isArray(msg.references) ? msg.references.map(normalizeReference) : null;
+      if (!references && sourcesPayload && Array.isArray(sourcesPayload.documents)) {
+        references = sourcesPayload.documents.map(normalizeReference);
+      }
+
+      let media = Array.isArray(msg.media) ? msg.media : null;
+      if (!media && mediaPayload) {
+        const collected = [];
+        if (Array.isArray(mediaPayload.videos)) {
+          mediaPayload.videos.forEach((video) => {
+            collected.push({
+              type: 'video',
+              title: video.name || video.title,
+              url: normalizeMediaUrl(video.Link || video.link || video.url),
+              source: video.source
+            });
+          });
+        }
+        if (Array.isArray(mediaPayload.images)) {
+          mediaPayload.images.forEach((image) => {
+            collected.push({
+              type: 'image',
+              url: normalizeMediaUrl(image.Link || image.link || image.url),
+              alt: image.name || image.title
+            });
+          });
+        }
+        if (collected.length > 0) {
+          media = collected;
+        }
+      }
+
+      return {
+        id: index + 1,
+        type: messageType,
+        text: messageText,
+        timestamp: new Date(msg.timestamp || msg.created_at || msg.date || Date.now()),
+        messageId: msg.id || msg.message_id || `msg-${index}`,
+        isWelcome: index === 0 && messageType === 'ai',
+        references,
+        media
+      };
+    });
+  };
+
+  // Função para salvar conversa automaticamente
+  const saveCurrentChat = async () => {
+    try {
+      // Só salva se tiver mensagens além da mensagem de boas-vindas
+      const userMessages = messages.filter(msg => msg.type === 'user');
+      if (userMessages.length === 0) return;
+
+      const chatData = {
+        session_id: sessionId,
+        title: chatTitle, // âœ… Sempre usa o título atual (padrão ou editado)
+        knowledge_context_code: selectedKnowledgeContextCode,
+        moodle_course_context: currentMoodleCourseContext,
+        messages: messages.filter(msg => !msg.isWelcome), // Remove mensagem de boas-vindas
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      console.log('ðŸ’¾ Salvando conversa automaticamente:', chatData);
+      console.log('ðŸ“ Título sendo salvo:', chatTitle);
+      
+      const result = await saveChat(chatData);
+      
+      // Verifica se salvou com sucesso (não retornou ok: false)
+      if (result && result.ok === false) {
+        console.log('âš ï¸ Salvamento não disponível (endpoint não implementado)');
+      } else if (result) {
+        console.log('âœ… Conversa salva com sucesso!');
+        // Força recarregamento do histórico na próxima abertura
+        setHistoryLoaded(false);
+      }
+    } catch (error) {
+      console.warn('âš ï¸ Não foi possível salvar conversa:', error.message);
+      // Não é crítico, continua funcionando normalmente
+    }
+  };
+
+  // Salvar conversa automaticamente quando há mudanças nas mensagens
+  useEffect(() => {
+    // Debounce: salva 2 segundos após a última mudança
+    const timeoutId = setTimeout(() => {
+      if (messages.length > 1) { // Só salva se tiver mais que a mensagem de boas-vindas
+        saveCurrentChat();
+      }
+    }, 2000);
+
+    return () => clearTimeout(timeoutId);
+  }, [messages, chatTitle, sessionId, selectedKnowledgeContextCode, currentMoodleCourseContext]);
+
+
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (message.trim() && !isLoading) {
+      if (isLoadingKnowledgeContexts) {
+        setKnowledgeContextError('Aguarde o carregamento das bases de conhecimento.');
+        return;
+      }
+
+      if (!selectedKnowledgeContextCode) {
+        setKnowledgeContextError('Selecione uma base de conhecimento antes de iniciar o chat.');
+        return;
+      }
+
+      const userMessageText = message.trim();
+      const userMsgId = `user-msg-${Date.now()}`;
+      
+      // Adiciona mensagem do usuário
+      const userMessage = {
+        id: messages.length + 1,
+        type: 'user',
+        text: userMessageText,
+        timestamp: new Date(),
+        messageId: userMsgId
+      };
+      setMessages(prev => [...prev, userMessage]);
+      setMessage('');
+      
+      setIsLoading(true);
+      
+      // Cria mensagem da IA vazia para ir preenchendo
+      const aiMsgId = `ai-msg-${Date.now()}`;
+      const aiMessageId = messages.length + 2;
+      
+      const initialAiMessage = {
+        id: aiMessageId,
+        type: 'ai',
+        text: '',
+        media: [],
+        timestamp: new Date(),
+        messageId: aiMsgId,
+        isStreaming: true
+      };
+      setMessages(prev => [...prev, initialAiMessage]);
+      
+      try {
+        let currentSessionId = sessionId;
+        let aiResponse = null;
+        let streamUrl = null;
+        
+        // Se é a primeira mensagem (apenas mensagem de boas-vindas), inicia nova conversa
+        if (messages.length === 1) {
+          console.log('ðŸ†• Iniciando nova conversa...');
+          const currentCourseExternalId =
+            routeCourseContext?.courseExternalId ||
+            currentMoodleCourseContext?.courseExternalId;
+          const currentKnowledgeContextCode =
+            routeCourseContext?.knowledgeContextCode ||
+            selectedKnowledgeContextCode;
+          const chatResponse = await startChat(userMessageText, {
+            knowledgeContextCode: currentKnowledgeContextCode,
+            courseExternalIds: currentCourseExternalId ? [currentCourseExternalId] : [],
+          });
+          currentSessionId = chatResponse.session_id;
+          aiResponse = chatResponse.response || chatResponse.message || chatResponse.answer || chatResponse.text;
+
+          if (chatResponse.knowledge_context_code) {
+            setSelectedKnowledgeContextCode(chatResponse.knowledge_context_code);
+          }
+          
+          // Pega o stream_url se disponível
+          if (chatResponse.stream_url) {
+            console.log('ðŸ”— Stream URL fornecida pelo backend:', chatResponse.stream_url);
+            streamUrl = chatResponse.stream_url;
+          }
+
+          // Usa o título retornado pelo /chat no início da conversa.
+          if (!pendingTitleRename) {
+            const backendTitle = generateCorrectTitle(chatResponse);
+            if (backendTitle) {
+              setChatTitle(backendTitle);
+            }
+          }
+          
+          setSessionId(currentSessionId);
+          setCurrentChatId(currentSessionId);
+          try {
+            sessionStorage.setItem(ACTIVE_CHAT_ID_KEY, currentSessionId);
+            localStorage.removeItem(ACTIVE_CHAT_ID_KEY);
+          } catch (_error) {
+            // noop
+          }
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage(
+                { type: 'senai_active_chat', chatId: currentSessionId },
+                MOODLE_PARENT_ORIGIN
+              );
+            }
+          } catch (_error) {
+            // noop
+          }
+          saveActiveChatState(currentSessionId, false);
+
+          if (pendingTitleRename && chatTitle) {
+            try {
+              console.log('ðŸ“ Aplicando título pendente:', chatTitle);
+              await renameChat(currentSessionId, chatTitle);
+              setPendingTitleRename(false);
+            } catch (error) {
+              console.warn('âš ï¸ Falha ao aplicar título pendente:', error.message);
+            }
+          }
+          
+          // âœ… Atualiza histórico imediatamente após iniciar nova conversa
+          console.log('ðŸ”„ Atualizando histórico após nova conversa...');
+          loadHistory(true);
+          
+          console.log('âœ… Nova conversa iniciada:', currentSessionId);
+          console.log('ðŸ“ Resposta da IA:', aiResponse);
+        } else {
+          // Mensagens seguintes: envia mensagem na conversa existente
+          console.log('ðŸ’¬ Enviando mensagem na conversa:', currentSessionId);
+          const messageResponse = await sendChatMessage(currentSessionId, userMessageText);
+          aiResponse = messageResponse.response || messageResponse.message || messageResponse.answer || messageResponse.text;
+          
+          // Pega o stream_url se disponível
+          if (messageResponse.stream_url) {
+            console.log('ðŸ”— Stream URL fornecida pelo backend:', messageResponse.stream_url);
+            streamUrl = messageResponse.stream_url;
+          }
+          
+          console.log('ðŸ“ Resposta da IA:', aiResponse);
+        }
+        
+        // Se temos resposta direta, usa ela
+        if (aiResponse) {
+          console.log('âœ… Usando resposta direta do backend');
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.id === aiMessageId 
+                ? { ...msg, text: aiResponse, isStreaming: false }
+                : msg
+            )
+          );
+          setIsLoading(false);
+          
+          // âœ… Atualiza o histórico
+          console.log('ðŸ”„ Atualizando histórico após nova mensagem...');
+          loadHistory(true);
+        } else {
+          // Fallback: tenta streaming (caso o backend suporte)
+          console.log('âš ï¸ Resposta não encontrada, tentando streaming...');
+          await getChatStream(
+            currentSessionId,
+            // onChunk - atualiza a mensagem conforme chega
+            (chunk, accumulated, meta) => {
+              if (meta?.media) {
+                setMessages(prev =>
+                  prev.map(msg =>
+                    msg.id === aiMessageId
+                      ? { ...msg, media: [ ...(msg.media || []), ...meta.media ] }
+                      : msg
+                  )
+                );
+                return;
+              }
+
+              if (meta?.sources) {
+                const references = meta.sources.map(normalizeReference);
+                setMessages(prev =>
+                  prev.map(msg =>
+                    msg.id === aiMessageId
+                      ? { ...msg, pendingReferences: references }
+                      : msg
+                  )
+                );
+                return;
+              }
+
+              setMessages(prev => 
+                prev.map(msg => 
+                  msg.id === aiMessageId 
+                    ? { ...msg, text: accumulated }
+                    : msg
+                )
+              );
+            },
+            // onComplete - finaliza o streaming
+            (finalText) => {
+              setMessages(prev => 
+                prev.map(msg => 
+                  msg.id === aiMessageId 
+                    ? {
+                        ...msg,
+                        text: finalText,
+                        isStreaming: false,
+                        references: msg.pendingReferences || msg.references,
+                        pendingReferences: undefined
+                      }
+                    : msg
+                )
+              );
+              setIsLoading(false);
+              
+              // âœ… Atualiza o histórico
+              console.log('ðŸ”„ Atualizando histórico após nova mensagem...');
+              loadHistory(true);
+              
+              console.log('âœ… Mensagem processada com sucesso!');
+            },
+            // onError - trata erros
+            (error) => {
+              console.error('âŒ Erro no streaming:', error);
+              const friendlyStreamError =
+                getFriendlyChatErrorMessage(error) ||
+                'Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.';
+              setMessages(prev => 
+                prev.map(msg => 
+                  msg.id === aiMessageId 
+                    ? { 
+                        ...msg, 
+                        text: friendlyStreamError,
+                        isStreaming: false 
+                      }
+                    : msg
+                )
+              );
+              setIsLoading(false);
+            },
+            // streamUrl - URL fornecida pelo backend
+            streamUrl
+          );
+        }
+        
+      } catch (error) {
+        console.error('âŒ Erro ao enviar mensagem:', error);
+        
+        // Detecta se é erro 500 (problema no servidor)
+        const isServerError = error?.status === 500 || error.message.includes('500') || error.message.includes('Servidor com problema');
+        const friendlyContextError = getFriendlyChatErrorMessage(error);
+        
+        let errorMessage = friendlyContextError || 'Desculpe, ocorreu um erro ao processar sua mensagem. Por favor, tente novamente.';
+
+        if (friendlyContextError) {
+          setKnowledgeContextError(friendlyContextError);
+        }
+        
+        if (isServerError) {
+          errorMessage = `ðŸ”§ Sistema Temporariamente Indisponível
+
+O servidor está passando por instabilidade técnica.
+
+ðŸ“‹ O que você pode fazer:
+• Aguardar alguns minutos e tentar novamente
+• Consultar as apostilas oficiais do curso
+• Anotar suas dúvidas para perguntar depois
+
+⏰ Tente novamente em alguns minutos
+ðŸ”§ Nossa equipe técnica foi notificada automaticamente
+
+Status: Erro 500 - Problema interno do servidor`;
+        }
+        
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === aiMessageId 
+              ? { 
+                  ...msg, 
+                  text: errorMessage,
+                  isStreaming: false 
+                }
+              : msg
+          )
+        );
+        setIsLoading(false);
+      }
+    }
+  };
+
+  // Função para enviar feedback (like/dislike)
+  const handleFeedback = async (messageId, isPositive) => {
+    const feedbackType = isPositive ? 'like' : 'dislike';
+    const currentFeedback = feedbackGiven[messageId];
+    
+    // Se já está enviando, não permite novo clique
+    if (currentFeedback?.status === 'sending') {
+      console.log('âš ï¸ Feedback sendo enviado, aguarde...');
+      return;
+    }
+    
+    // Se clicou no mesmo botão que já está selecionado, não faz nada
+    if (currentFeedback?.type === feedbackType && currentFeedback?.status === 'sent') {
+      console.log(`âš ï¸ ${feedbackType} já foi dado para esta mensagem`);
+      return;
+    }
+
+    try {
+      const rating = isPositive ? 'positive' : 'negative';
+      
+      // Marca o feedback como "enviando" para evitar duplo clique
+      setFeedbackGiven(prev => ({
+        ...prev,
+        [messageId]: { type: feedbackType, status: 'sending' }
+      }));
+      
+      // Verifica se o sessionId é um UUID válido
+      const isValidUUID = (str) => {
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        return uuidRegex.test(str);
+      };
+      
+      // Se o sessionId não for UUID válido, gera um novo
+      let validSessionId = sessionId;
+      if (!isValidUUID(sessionId)) {
+        validSessionId = generateUUID();
+        setSessionId(validSessionId);
+        console.warn(`âš ï¸ Session ID "${sessionId}" não é UUID válido, gerando novo: ${validSessionId}`);
+      }
+      
+      console.log(`ðŸ“ Tentando enviar feedback ${feedbackType} para mensagem:`, messageId);
+      console.log(`ðŸ“ Session ID válido:`, validSessionId);
+      
+      await sendFeedback(validSessionId, messageId, rating);
+      console.log(`âœ… Feedback ${feedbackType} enviado com sucesso!`);
+      
+      // Marca o feedback como enviado com sucesso
+      setFeedbackGiven(prev => ({
+        ...prev,
+        [messageId]: { type: feedbackType, status: 'sent' }
+      }));
+      
+    } catch (error) {
+      console.error(`âŒ Erro ao enviar feedback:`, error.message);
+      
+      // Remove o feedback em caso de erro para permitir nova tentativa
+      setFeedbackGiven(prev => {
+        const newState = { ...prev };
+        delete newState[messageId];
+        return newState;
+      });
+      
+      // Se for erro 422, pode ser que o backend espera um formato diferente
+      if (error.message.includes('422')) {
+        console.warn('âš ï¸ O backend pode estar esperando um formato diferente de dados.');
+        console.warn('âš ï¸ Verifique com o time de backend o formato esperado para o endpoint /chat/feedback');
+      }
+    }
+  };
+
+  // Função para copiar texto para área de transferência
+  const getCopyableMessageText = (msg) => {
+    if (!msg) return '';
+
+    if (msg.isWelcome) {
+      return [
+        'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+        '',
+        'Estou aqui para facilitar sua jornada.',
+        '',
+        'Você pode me perguntar sobre qualquer conteúdo do seu curso: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é te dar as melhores respostas sobre o conteúdo do seu curso.',
+        '',
+        'Estou limitada nosso conteúdo interno. Não posso responder outras dúvidas, como por exemplo, fazer um bolo.',
+        '',
+        'Pode contar comigo para tornar o aprendizado mais leve, claro e acessível.',
+        '',
+        'Vamos juntos!'
+      ].join('\n');
+    }
+
+    let text = msg.text || '';
+
+    if (Array.isArray(msg.references) && msg.references.length > 0) {
+      const refs = msg.references.map((ref) => {
+        const source = ref.source || ref.title || 'Fonte';
+        const page = ref.page ? `, páginas: ${ref.page}` : '';
+        const link = ref.link ? `, link: ${ref.link}` : '';
+        return `- ${source}${page}${link}`;
+      });
+      text += `\n\nFontes consultadas:\n${refs.join('\n')}`;
+    }
+
+    if (Array.isArray(msg.media) && msg.media.length > 0) {
+      const images = msg.media.filter((item) => item.type === 'image');
+      const videos = msg.media.filter((item) => item.type === 'video');
+
+      if (images.length > 0) {
+        const imageLines = images.map((img) => `- ${img.alt || 'Imagem'}: ${img.url || ''}`);
+        text += `\n\nImagens relacionadas:\n${imageLines.join('\n')}`;
+      }
+
+      if (videos.length > 0) {
+        const videoLines = videos.map((video) => `- ${video.title || 'Vídeo'}: ${video.url || ''}`);
+        text += `\n\nVídeos relacionados:\n${videoLines.join('\n')}`;
+      }
+    }
+
+    return text.trim();
+  };
+
+  const handleCopyMessage = async (text, messageId) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      
+      // Marca como copiado
+      setCopiedMessages(prev => ({
+        ...prev,
+        [messageId]: true
+      }));
+      
+      // Remove o estado após 2 segundos
+      setTimeout(() => {
+        setCopiedMessages(prev => {
+          const newState = { ...prev };
+          delete newState[messageId];
+          return newState;
+        });
+      }, 2000);
+      
+      console.log('âœ… Texto copiado com sucesso!');
+    } catch (error) {
+      console.error('Erro ao copiar texto:', error);
+      // Fallback para navegadores mais antigos
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        
+        // Marca como copiado mesmo no fallback
+        setCopiedMessages(prev => ({
+          ...prev,
+          [messageId]: true
+        }));
+        
+        // Remove o estado após 2 segundos
+        setTimeout(() => {
+          setCopiedMessages(prev => {
+            const newState = { ...prev };
+            delete newState[messageId];
+            return newState;
+          });
+        }, 2000);
+        
+        console.log('âœ… Texto copiado com sucesso (fallback)!');
+      } catch (err) {
+        console.error('Erro ao copiar texto (fallback):', err);
+      }
+      document.body.removeChild(textArea);
+    }
+  };
+
+  // Função para deletar conversa do histórico
+  const handleDeleteChat = async (chat) => {
+    const chatId = getChatIdentifier(chat);
+
+    // Remove da lista local imediatamente
+    setChatHistory(prev => prev.filter(c => getChatIdentifier(c) !== chatId));
+    
+    // Se a conversa deletada é a atual, limpa o chat
+    if (currentChatId === chatId || sessionId === chatId) {
+      handleNewChat();
+    }
+    
+    // Tenta deletar no backend (se o endpoint existir)
+    try {
+      console.log('ðŸ—‘ï¸ Tentando deletar conversa no backend:', chatId);
+      await deleteChat(chatId);
+      console.log('âœ… Conversa deletada com sucesso no backend!');
+    } catch (error) {
+      console.log('âš ï¸ Erro ao deletar no backend (mantendo delete local):', error.message);
+    }
+    
+    console.log('âœ… Conversa removida da interface');
+  };
+
+  // Função para carregar uma conversa do histórico
+  const handleLoadChat = async (chat) => {
+    console.log('ðŸ” Carregando chat:', chat);
+    
+    try {
+      // Define o ID do chat atual
+      const chatId = getChatIdentifier(chat);
+      setCurrentChatId(chatId);
+      setSessionId(chatId);
+      saveActiveChatState(chatId, false);
+      
+      // Atualiza o título usando a mesma lógica do histórico
+      setChatTitle(generateCorrectTitle(chat));
+      
+      // Carrega a conversa completa da API
+      console.log('ðŸ“¡ Buscando conversa completa da API:', chatId);
+        const chatData = await loadChat(chatId);
+        
+          if (!chatData) {
+            console.log('âš ï¸ Conversa não encontrada no backend, iniciando nova.');
+            clearActiveChatState();
+            setMessages([
+            {
+              id: 1,
+              type: 'ai',
+              text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+              isWelcome: true,
+              timestamp: new Date(),
+              messageId: 'welcome-msg'
+            }
+          ]);
+          setIsHistoryOpen(false);
+          return;
+        }
+
+        console.log('ðŸ“¦ Dados da conversa carregados:', chatData);
+        syncKnowledgeSelectionFromChat(chatData, chat);
+      
+      const messagesToLoad = extractMessagesFromChatData(chatData, chat);
+
+
+      console.log('ðŸ“ Mensagens encontradas:', messagesToLoad);
+      
+      if (messagesToLoad.length > 0) {
+        const formattedMessages = formatMessagesForUI(messagesToLoad);
+
+
+        console.log('âœ… Mensagens formatadas:', formattedMessages);
+        setMessages(formattedMessages);
+      } else {
+        console.log('âš ï¸ Nenhuma mensagem encontrada, usando mensagem padrão');
+        // Se não tiver mensagens, inicia com mensagem de boas-vindas
+        setMessages([
+          {
+            id: 1,
+            type: 'ai',
+            text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+            isWelcome: true,
+            timestamp: new Date(),
+            messageId: 'welcome-msg'
+          }
+        ]);
+      }
+      
+    } catch (error) {
+      console.error('âŒ Erro ao carregar conversa:', error);
+      
+      // Fallback: usar dados básicos do histórico
+      const chatId = getChatIdentifier(chat);
+      setCurrentChatId(chatId);
+      setSessionId(chatId);
+      setChatTitle(generateCorrectTitle(chat));
+      syncKnowledgeSelectionFromChat(null, chat);
+      
+      // Mensagem padrão em caso de erro
+      setMessages([
+        {
+          id: 1,
+          type: 'ai',
+          text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+          isWelcome: true,
+          timestamp: new Date(),
+          messageId: 'welcome-msg'
+        }
+      ]);
+    }
+    
+    // Limpa o estado de feedback e cópia ao carregar nova conversa
+    setFeedbackGiven({});
+    setCopiedMessages({});
+    
+    // Fecha o histórico
+    setIsHistoryOpen(false);
+  };
+
+  useEffect(() => {
+    let ignore = false;
+    const restoreActiveChat = async () => {
+      let storedChatId = null;
+      let storedChatIsDraft = false;
+      let localActiveChatId = null;
+        try {
+          const urlParams = new URLSearchParams(window.location.search);
+          const isEmbedded = window.parent && window.parent !== window;
+          const explicitChatIdFromUrl =
+            urlParams.get('active_chat_id') ||
+            urlParams.get('chat_id') ||
+            urlParams.get('session_id');
+          const explicitDraftFromUrl = urlParams.get('active_chat_draft') === '1';
+
+          localActiveChatId = sessionStorage.getItem(ACTIVE_CHAT_ID_KEY);
+          // Apenas a tela expandida deve consumir o pendingExpandChatId.
+          // No iframe, manter esse valor evita perder o chat correto ao clicar em expandir.
+          const pendingExpandChatId = !isEmbedded
+            ? sessionStorage.getItem(PENDING_EXPAND_CHAT_ID_KEY)
+            : null;
+          const pendingExpandIsDraft = !isEmbedded &&
+            sessionStorage.getItem(PENDING_EXPAND_CHAT_DRAFT_KEY) === '1';
+          storedChatIsDraft = sessionStorage.getItem(ACTIVE_CHAT_DRAFT_KEY) === '1';
+
+          // Prioridade:
+          // 1) active_chat_id/chat_id/session_id explícitos na URL do expandido
+          // 2) pendingExpandChatId (fallback para integrações que não enviam URL atualizada)
+          // 3) activeChatId local (fallback)
+          // Não usamos mais sid/session_id legado para evitar restaurar chat antigo por engano.
+          storedChatId = explicitChatIdFromUrl || pendingExpandChatId || localActiveChatId;
+          if (!explicitChatIdFromUrl && pendingExpandChatId) {
+            storedChatIsDraft = pendingExpandIsDraft;
+            sessionStorage.removeItem(PENDING_EXPAND_CHAT_ID_KEY);
+            sessionStorage.removeItem(PENDING_EXPAND_CHAT_DRAFT_KEY);
+          }
+
+          if (!localActiveChatId && explicitChatIdFromUrl) {
+            storedChatIsDraft = explicitDraftFromUrl;
+          }
+
+          if (storedChatId && storedChatId !== localActiveChatId) {
+            saveActiveChatState(storedChatId, storedChatIsDraft);
+          } else if (storedChatId && !explicitChatIdFromUrl) {
+            // Garante que a URL do chat expandido reflita o chat ativo restaurado.
+            syncActiveChatInUrl(storedChatId, storedChatIsDraft);
+          }
+        } catch (error) {
+          console.warn('Falha ao ler active_chat_id da URL:', error);
+        }
+
+      try {
+        if (!storedChatId) storedChatId = sessionStorage.getItem(ACTIVE_CHAT_ID_KEY);
+      } catch (error) {
+        console.warn('Falha ao ler activeChatId do sessionStorage:', error);
+        return;
+      }
+
+      if (!storedChatId) return;
+      if (storedChatId === currentChatId || storedChatId === sessionId) return;
+
+      if (storedChatIsDraft) {
+        console.log('Restaurando chat novo vazio (rascunho).');
+        setCurrentChatId(null);
+        setSessionId(storedChatId);
+        setChatTitle('');
+        setMessages([
+          {
+            id: 1,
+            type: 'ai',
+            text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+            isWelcome: true,
+            timestamp: new Date(),
+            messageId: 'welcome-msg'
+          }
+        ]);
+        setFeedbackGiven({});
+        setCopiedMessages({});
+        return;
+      }
+
+      try {
+        console.log('Tentando restaurar chat ativo do storage:', storedChatId);
+        const history = await getChatHistory();
+        if (ignore) return;
+
+        if (Array.isArray(history)) {
+          const match = history.find((chat) => {
+            const chatId = getChatIdentifier(chat);
+            return chatId === storedChatId;
+          });
+
+          if (match) {
+            await handleLoadChat(match);
+            return;
+          }
+        }
+
+        console.log('Chat nao encontrado no historico, carregando direto pela API.');
+          const chatData = await loadChat(storedChatId);
+          if (ignore) return;
+
+          if (!chatData) {
+            console.log('Chat inexistente no backend, limpando activeChatId.');
+            clearActiveChatState();
+            return;
+          }
+
+          const messagesToLoad = extractMessagesFromChatData(chatData, null);
+        setCurrentChatId(storedChatId);
+        setSessionId(storedChatId);
+        setChatTitle(generateCorrectTitle(chatData));
+        syncKnowledgeSelectionFromChat(chatData, null);
+
+        if (messagesToLoad.length > 0) {
+          setMessages(formatMessagesForUI(messagesToLoad));
+        } else {
+          setMessages([
+            {
+              id: 1,
+              type: 'ai',
+              text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+              isWelcome: true,
+              timestamp: new Date(),
+              messageId: 'welcome-msg'
+            }
+          ]);
+        }
+
+        setFeedbackGiven({});
+        setCopiedMessages({});
+      } catch (error) {
+        console.error('Erro ao restaurar chat ativo:', error);
+      }
+    };
+
+    restoreActiveChat();
+    return () => {
+      ignore = true;
+    };
+  }, [location.pathname, location.search]);
+
+  const handleNewChat = () => {
+    // A nova API salva automaticamente, então só precisamos limpar a interface
+    console.log('ðŸ†• Iniciando nova conversa...');
+    
+    // Cria nova sessão com UUID válido
+    const newSessionId = generateUUID();
+    setSessionId(newSessionId);
+    setCurrentChatId(null);
+    latestActiveChatRef.current = newSessionId;
+    latestIsDraftRef.current = true;
+
+    // Atualiza imediatamente o chat ativo para o widget maximizado abrir limpo
+    saveActiveChatState(newSessionId, true);
+
+    // Reseta as mensagens para o estado inicial
+    setMessages([
+      {
+        id: 1,
+        type: 'ai',
+        text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+        isWelcome: true,
+        timestamp: new Date(),
+        messageId: 'welcome-msg'
+      }
+    ]);
+    
+    // Limpa o estado de feedback e cópia
+    setFeedbackGiven({});
+    setCopiedMessages({});
+    
+    // Novo chat sem título sintético: aguarda título vindo do backend em /chat.
+    setChatTitle('');
+    
+    // Força reload do histórico na próxima abertura
+    setHistoryLoaded(false);
+    
+    console.log('âœ… Nova conversa iniciada!');
+  };
+
+  const handleResumeConversationHere = async () => {
+    let activeId = currentChatId || sessionId;
+    try {
+      const storedActiveId = sessionStorage.getItem(ACTIVE_CHAT_ID_KEY);
+      if (storedActiveId) {
+        activeId = storedActiveId;
+      }
+    } catch (_error) {
+      // noop
+    }
+    if (!activeId) {
+      setIsExpandedOverlayOpen(false);
+      return;
+    }
+
+    setIsRefreshingHistory(true);
+    try {
+      const existingChat = Array.isArray(chatHistory)
+        ? chatHistory.find((chat) => (chat.id || chat.session_id || chat.chat_id) === activeId)
+        : null;
+
+      await handleLoadChat(
+        existingChat || {
+          id: activeId,
+          session_id: activeId,
+          title: chatTitle,
+          updated_at: new Date().toISOString(),
+        }
+      );
+
+      setIsExpandedOverlayOpen(false);
+      requestAnimationFrame(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
+    } catch (error) {
+      console.error('Erro ao retomar conversa no iframe:', error);
+      // Fallback local: quando a API falha (ex.: token expirado), restaura
+      // o snapshot mais recente salvo pela aba expandida.
+      try {
+        const rawSnapshot = sessionStorage.getItem(`${CHAT_SNAPSHOT_PREFIX}${activeId}`);
+        if (rawSnapshot) {
+          const snapshot = JSON.parse(rawSnapshot);
+          const snapshotMessages = Array.isArray(snapshot?.messages) ? snapshot.messages : [];
+          setCurrentChatId(activeId);
+          setSessionId(activeId);
+          setChatTitle(snapshot?.title || '');
+          if (typeof snapshot?.knowledgeContextCode === 'string' && snapshot.knowledgeContextCode.trim()) {
+            setSelectedKnowledgeContextCode(snapshot.knowledgeContextCode.trim());
+          }
+          const snapshotCourseContext = normalizeMoodleCourseContext(snapshot?.moodleCourseContext);
+          if (snapshotCourseContext) {
+            setCurrentMoodleCourseContext(snapshotCourseContext);
+          }
+          setMessages(
+            snapshotMessages.length > 0
+              ? snapshotMessages
+              : [
+                  {
+                    id: 1,
+                    type: 'ai',
+                    text: 'Olá! Eu sou a SEN.AI, sua parceira de estudo.',
+                    isWelcome: true,
+                    timestamp: new Date(),
+                    messageId: 'welcome-msg'
+                  }
+                ]
+          );
+          setFeedbackGiven({});
+          setCopiedMessages({});
+        }
+      } catch (_snapshotError) {
+        // noop
+      }
+      setIsExpandedOverlayOpen(false);
+    } finally {
+      setIsRefreshingHistory(false);
+    }
+  };
+
+  const handleStartNewConversationHere = () => {
+    setIsExpandedOverlayOpen(false);
+    handleNewChat();
+  };
+
+  const handleTitleEdit = () => {
+    setIsEditingTitle(true);
+  };
+
+  useEffect(() => {
+    const hasUserMessages = messages.some((msg) => msg.type === 'user');
+    const activeChatId = currentChatId || sessionId;
+    if (!activeChatId) return;
+    // Evita sobrescrever o chat ativo salvo ao abrir a tela expandida:
+    // no primeiro render ainda não restauramos o chat real e o sessionId é temporário.
+    if (!currentChatId && !hasUserMessages) return;
+
+    saveActiveChatState(activeChatId, !hasUserMessages);
+  }, [messages, currentChatId, sessionId]);
+
+  const handleTitleChange = (e) => {
+    setChatTitle(e.target.value);
+  };
+
+  const handleTitleBlur = async () => {
+    setIsEditingTitle(false);
+    
+    // Salva o novo título no backend se tiver mensagens do usuário
+    const userMessages = messages.filter(msg => msg.type === 'user');
+    if (userMessages.length > 0) {
+      try {
+        console.log('ðŸ“ Salvando novo título:', chatTitle);
+        await renameChat(sessionId, chatTitle);
+        console.log('âœ… Título salvo com sucesso!');
+        
+        // Força recarregamento do histórico para refletir a mudança
+        setHistoryLoaded(false);
+        if (isHistoryOpen) {
+          loadHistory(true);
+        }
+      } catch (error) {
+        console.error('âŒ Erro ao salvar título:', error);
+      }
+    } else {
+      // Sem mensagens ainda: agenda para renomear após a primeira pergunta
+      setPendingTitleRename(true);
+    }
+  };
+
+  const handleOpenLogoutModal = () => {
+    setIsLogoutModalOpen(true);
+  };
+
+  const handleCloseLogoutModal = () => {
+    setIsLogoutModalOpen(false);
+  };
+
+  const getMoodleReturnUrl = () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const explicitReturn =
+        params.get('return_url') ||
+        params.get('moodle_return_url') ||
+        params.get('redirect_url');
+      if (explicitReturn) return explicitReturn;
+    } catch (error) {
+      console.warn('Falha ao ler parâmetros de retorno:', error);
+    }
+
+    if (document.referrer && document.referrer.startsWith('http')) {
+      return document.referrer;
+    }
+
+    return `${window.location.origin}/my/`;
+  };
+
+  const handleConfirmLogout = () => {
+    clearActiveChatState();
+    clearStoredChatSnapshots();
+    if (!moodleUser?.fromMoodle) {
+      clearToken();
+      clearMoodleUser();
+      try {
+        sessionStorage.removeItem('moodle_token');
+        localStorage.removeItem('moodle_token');
+      } catch (_error) {
+        // noop
+      }
+      setIsLogoutModalOpen(false);
+      window.location.reload();
+      return;
+    }
+
+    const moodleUrl = getMoodleReturnUrl();
+    setIsLogoutModalOpen(false);
+    window.location.href = moodleUrl;
+  };
+
+  return (
+    <div className="flex flex-col h-screen min-h-0 overflow-hidden bg-[#ffffff]">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200 px-3 md:px-6 py-2 md:py-3 flex-shrink-0 sticky top-0 z-50">
+        <div className="max-w-[1400px] mx-auto flex items-center justify-between">
+          {/* Left side - Logo and Chat Title */}
+          <div className="flex items-center gap-2 md:gap-4">
+            <img 
+              src={suportiaWordmark} 
+              alt="Suport.IA" 
+              className="w-16 h-auto md:w-[100px]"
+            />
+            
+            <div className="hidden md:flex items-center gap-2 bg-[#262626] text-[#F2F2F2] px-4 py-2 rounded-md text-sm">
+              <button 
+                onClick={handleTitleEdit}
+                title="alterar nome do chat"
+                aria-label="alterar nome do chat"
+                className="p-0.5 text-[#F2F2F2] hover:text-white transition-colors"
+              >
+                <Pencil size={14} />
+              </button>
+              {isEditingTitle ? (
+                <input
+                  type="text"
+                  value={chatTitle}
+                  onChange={handleTitleChange}
+                  onBlur={handleTitleBlur}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleTitleBlur();
+                    }
+                  }}
+                  autoFocus
+                  className="bg-transparent border-none focus:outline-none text-[#F2F2F2] text-sm"
+                  style={{ width: '180px' }}
+                />
+              ) : (
+                <span className="text-sm font-medium">{displayChatTitle}</span>
+              )}
+            </div>
+            
+            {/* Mobile: Chat title button */}
+            <button 
+              onClick={handleTitleEdit}
+              title="alterar nome do chat"
+              aria-label="alterar nome do chat"
+              className="flex md:hidden items-center gap-2 bg-[#262626] text-[#F2F2F2] px-3 py-1.5 rounded-md text-xs hover:bg-[#1a1a1a] transition-colors"
+            >
+              <Pencil size={12} />
+              {isEditingTitle ? (
+                <input
+                  type="text"
+                  value={chatTitle}
+                  onChange={handleTitleChange}
+                  onBlur={handleTitleBlur}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleTitleBlur();
+                    }
+                  }}
+                  autoFocus
+                  className="bg-transparent border-none focus:outline-none text-[#F2F2F2] text-xs"
+                  style={{ width: '140px' }}
+                />
+              ) : (
+                <span className="text-xs font-medium btTituloConversa">{displayChatTitle}</span>
+              )}
+            </button>
+          </div>
+          
+          {/* Right side - Nova conversa, History and User */}
+          <div className="flex items-center gap-2 md:gap-3">
+            {/* Desktop: Nova conversa com texto */}
+            <button 
+              onClick={handleNewChat}
+              title="nova conversa"
+              className="hidden md:flex items-center gap-2 bg-[#262626] text-[#F2F2F2] px-4 py-2 rounded-md text-sm hover:bg-[#1a1a1a] transition-colors"
+            >
+              <img src={novaConversaIcon} alt="Nova conversa" className="w-4 h-4" />
+              Nova conversa
+            </button>
+            
+            {/* Mobile: Nova conversa só ícone */}
+            <div className="relative group md:hidden">
+              <button 
+                onClick={handleNewChat}
+                title="nova conversa"
+                aria-label="nova conversa"
+                className="bg-[#262626] text-[#F2F2F2] rounded-md hover:bg-[#1a1a1a] transition-colors items-center justify-center flex"
+                style={{ 
+                  width: '32px', 
+                  height: '32px',
+                  padding: '6px'
+                }}
+              >
+                <img src={novaConversaIcon} alt="Nova conversa" className="w-4 h-4" />
+              </button>
+              <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap rounded bg-[#262626] px-2 py-1 text-[11px] text-white opacity-0 shadow transition-opacity group-hover:opacity-100">
+                nova conversa
+              </span>
+            </div>
+            
+            <div className="relative group">
+              <button 
+                onClick={() => setIsHistoryOpen(true)}
+                title="histórico"
+                aria-label="histórico"
+                className="text-[#F2F2F2] rounded-md transition-colors flex items-center justify-center" 
+                style={{ 
+                  width: '32px', 
+                  height: '32px',
+                  padding: '6px',
+                  backgroundColor: isHistoryOpen ? '#C13A0D' : '#262626'
+                }}
+              >
+                <img src={historicoIcon} alt="Histórico" className="w-4 h-4 md:w-5 md:h-5" />
+              </button>
+              <span className="pointer-events-none absolute left-1/2 top-full mt-1 -translate-x-1/2 whitespace-nowrap rounded bg-[#262626] px-2 py-1 text-[11px] text-white opacity-0 shadow transition-opacity group-hover:opacity-100">
+                histórico
+              </span>
+            </div>
+            
+            {/* Desktop: User info completo */}
+            <div className="hidden md:flex items-center">
+              <div className="text-left">
+                <p className="text-sm font-medium text-gray-700">{getDisplayUserName(moodleUser)}</p>
+                <button
+                  type="button"
+                  onClick={handleOpenLogoutModal}
+                  className="text-xs text-[#EF5E31] cursor-pointer hover:text-[#d54d25]"
+                >
+                  Sair
+                </button>
+              </div>
+            </div>
+            
+            {/* Mobile: Só o ícone do usuário */}
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content - Scrollable */}
+      <main ref={mainScrollRef} onScroll={handleScrollMain} className="flex-1 min-h-0 overflow-y-auto">
+        <div className="max-w-[900px] mx-auto px-3 md:px-6 w-full py-6 md:py-12">
+          {/* Logo and Welcome */}
+          <div className="text-center mb-8 md:mb-16">
+            <div className="mb-6 md:mb-8 flex justify-center">
+              <img 
+                src={suportiaLogo} 
+                alt="FIERGS Suport.IA"
+                className="w-48 md:w-[260px] h-auto"
+              />
+            </div>
+            
+            <h2 className="text-base md:text-xl font-semibold text-gray-900 mb-8 md:mb-12 px-4">
+              Bem-vindo(a) à inteligência artificial do SESI SuportIA
+            </h2>
+
+            {/* Action Cards */}
+            <div className="flex flex-col items-center gap-4 px-4">
+              {/* Card 1 */}
+              <div 
+                className="bg-[#FFFFFF] rounded-2xl text-center items-center flex flex-col w-full max-w-[640px] overflow-hidden"
+                style={{ 
+                  minHeight: '178px', 
+                  padding: '16px',
+                  boxShadow: '0px 0px 12px 0px #C3E9FC80'
+                }}
+              >
+                <div className="flex items-center justify-center gap-3 mb-2 w-full">
+                  <div
+                    className="bg-[#FFEFEA] flex items-center justify-center"
+                    style={{
+                      width: '40px',
+                      height: '40px',
+                      borderRadius: '8px',
+                      padding: '4px',
+                      opacity: 1
+                    }}
+                  >
+                    <img src={questionIcon} alt="Question" className="w-6 h-6" />
+                  </div>
+                  <h3
+                    className="text-[#2D2D2D]"
+                    style={{
+                      fontFamily: 'Inter, sans-serif',
+                      fontWeight: 700,
+                      fontSize: '14px',
+                      lineHeight: '100%',
+                      letterSpacing: '0.1px'
+                    }}
+                  >
+                    Quero ajudar você a tirar suas dúvidas
+                  </h3>
+                </div>
+                <p 
+                  className="text-[#BDBDBD] break-words text-center"
+                  style={{ 
+                    fontFamily: 'Inter, sans-serif',
+                    fontWeight: 400,
+                    fontSize: '12px',
+                    lineHeight: '120%',
+                    letterSpacing: '0.4px'
+                  }}
+                >
+                  Pergunte sobre o conteúdo dos manuais e eu busco as respostas, indicando a fonte e a página, além de mostrar links de vídeos e imagens para facilitar seu entendimento.
+                </p>
+              </div>
+
+              {/* Card 2 */}
+              <div 
+                className="bg-[#FFFFFF] rounded-2xl transition-colors transition-shadow cursor-pointer text-center items-center flex flex-col w-full max-w-[640px] hover:bg-[#FFEFEA]"
+                style={{ 
+                  height: 'fit-content', 
+                  padding: '16px',
+                  boxShadow: '0px 0px 12px 0px #C3E9FC80'
+                }}
+                onClick={() => setIsHistoryOpen(true)}
+              >
+                <div className="flex items-center justify-center gap-3 w-full">
+                  <div 
+                    className="bg-[#FFEFEA] flex items-center justify-center" 
+                    style={{ 
+                      width: '40px', 
+                      height: '40px',
+                      borderRadius: '8px',
+                      padding: '4px',
+                      opacity: 1
+                    }}
+                  >
+                    <img src={vectorLogo} alt="Histórico" className="w-6 h-6" />
+                  </div>
+                  <h3 
+                    className="text-[#2D2D2D]"
+                    style={{ 
+                      fontFamily: 'Inter, sans-serif',
+                      fontWeight: 700,
+                      fontSize: '14px',
+                      lineHeight: '100%',
+                      letterSpacing: '0.1px',
+                      color: '#E84910'
+                    }}
+                  >
+                    Veja suas últimas conversas
+                  </h3>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          {/* Chat Messages */}
+          {messages.length > 0 && (
+            <div className="space-y-4 md:space-y-6 mt-6 md:mt-8">
+              {messages.map((msg, index) => {
+                const previousMsg = index > 0 ? messages[index - 1] : null;
+                const timeSeparator = getTimeSeparator(msg, previousMsg);
+                
+                return (
+                  <div key={msg.id}>
+                    {/* Separador de tempo se necessário */}
+                    {timeSeparator && renderTimeSeparator(timeSeparator)}
+                    
+                    {/* Mensagem */}
+                <div 
+                  key={msg.id} 
+                  className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}
+                >
+                  {msg.type === 'user' ? (
+                    <div className="max-w-[95%] md:max-w-[80%]">
+                      {/* Caixa da mensagem do usuário */}
+                      <div 
+                        className="rounded-2xl px-4 md:px-6 py-3 md:py-4"
+                        style={{ backgroundColor: '#F6FBFF' }}
+                      >
+                        {/* Header com Nome do aluno */}
+                        <div className="mb-3 pb-3 border-b border-gray-200">
+                          <span className="text-[#003d7a] font-bold text-sm">{getDisplayUserName(moodleUser)}</span>
+                          <span className="text-gray-400 text-sm"> · {formatRelativeTime(msg.timestamp)}</span>
+                        </div>
+                        
+                        <p className="text-gray-700 text-sm leading-relaxed whitespace-pre-line break-words">
+                          {normalizeMessageForDisplay(msg.text)}
+                        </p>
+                        
+                        {/* Footer com botão copiar */}
+                        <div className="flex items-center justify-end mt-4">
+                          <button 
+                            onClick={() => handleCopyMessage(getCopyableMessageText(msg), msg.messageId)}
+                            title="copiar"
+                            className="hover:opacity-80 transition-opacity flex items-center justify-center"
+                          >
+                            {copiedMessages[msg.messageId] ? (
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M20 6L9 17L4 12" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            ) : (
+                              <img src={copiarIcon} alt="Copiar" style={{ width: '16px', height: '16px' }} />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full md:w-full">
+                      {/* Caixa da mensagem */}
+                      <div 
+                        className="bg-white rounded-2xl px-4 md:px-6 py-3 md:py-4"
+                        style={{ border: '1px solid #DFDFDF' }}
+                      >
+                        {/* Header com logo Suport.IA dentro da caixa */}
+                        <div className="mb-3 pb-3 border-b border-gray-200 flex items-center gap-2">
+                          <img src={suportiaLogo} alt="Suport.IA" className="h-6 w-auto" />
+                          <span className="text-gray-400 text-sm"> · {formatRelativeTime(msg.timestamp)}</span>
+                        </div>
+                        
+                        {msg.isWelcome ? (
+                          <div className="text-gray-700 text-sm leading-relaxed">
+                            <p className="font-bold mb-4">{msg.text}</p>
+                            <p className="mb-4">Estou aqui para facilitar sua jornada.</p>
+                            <p className="mb-4">
+                              Você pode me perguntar sobre qualquer <span style={{ color: '#E84910', fontWeight: 600 }}>conteúdo dos manuais</span>: conceitos, atividades, documentos ou trechos das apostilas. Meu papel é te dar as melhores respostas sobre <span style={{ color: '#E84910', fontWeight: 600 }}>o conteúdo dos manuais</span>.
+                            </p>
+                            <p className="mb-4">Estou limitada ao conteúdo interno. Não posso responder outras dúvidas, como por exemplo, fazer um bolo.</p>
+                            <p className="mb-4">Pode contar comigo para tornar a sua jornada mais leve, clara e acessível. 😉</p>
+                            <p>Vamos juntos!</p>
+                          </div>
+                        ) : (
+                          <AIMessageContent message={msg} />
+                        )}
+                        
+                        {/* Footer com feedback */}
+                        <div className="flex items-center justify-end mt-4">
+                          {/* Mostrar feedback completo apenas a partir da segunda mensagem da IA */}
+                          {msg.id > 1 && (
+                            <div className="flex items-center">
+                              <span className="text-xs text-gray-400 italic">Dê seu feedback sobre a resposta</span>
+                              <div className="flex items-center gap-2 ml-2">
+                                {/* Dislike */}
+                                <button 
+                                  onClick={() => handleFeedback(msg.messageId, false)}
+                                  title="não gostei"
+                                  aria-label="não gostei"
+                                  disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
+                                  className={`transition-all flex items-center justify-center w-6 h-6 ${
+                                    feedbackGiven[msg.messageId]?.status === 'sending' 
+                                      ? 'opacity-50 cursor-not-allowed' 
+                                      : 'hover:opacity-80'
+                                  }`}
+                                  style={{ 
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: '0',
+                                    margin: '0'
+                                  }}
+                                >
+                                  <img 
+                                    src={dislikeIcon} 
+                                    alt="Dislike" 
+                                    style={{ 
+                                      width: '16px', 
+                                      height: '16px',
+                                      display: 'block',
+                                      objectFit: 'contain',
+                                      filter: feedbackGiven[msg.messageId]?.type === 'dislike' && feedbackGiven[msg.messageId]?.status === 'sent'
+                                        ? 'brightness(0) saturate(100%) invert(39%) sepia(88%) saturate(3066%) hue-rotate(9deg) brightness(97%) contrast(96%)'
+                                        : 'none'
+                                    }} 
+                                  />
+                                </button>
+                                {/* Like */}
+                                <button 
+                                  onClick={() => handleFeedback(msg.messageId, true)}
+                                  title="gostei"
+                                  aria-label="gostei"
+                                  disabled={feedbackGiven[msg.messageId]?.status === 'sending'}
+                                  className={`transition-all flex items-center justify-center w-6 h-6 ${
+                                    feedbackGiven[msg.messageId]?.status === 'sending' 
+                                      ? 'opacity-50 cursor-not-allowed' 
+                                      : 'hover:opacity-80'
+                                  }`}
+                                  style={{ 
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: '0',
+                                    margin: '0'
+                                  }}
+                                >
+                                  <img 
+                                    src={likeIcon} 
+                                    alt="Like" 
+                                    style={{ 
+                                      width: '16px', 
+                                      height: '16px',
+                                      display: 'block',
+                                      objectFit: 'contain',
+                                      filter: feedbackGiven[msg.messageId]?.type === 'like' && feedbackGiven[msg.messageId]?.status === 'sent'
+                                        ? 'brightness(0) saturate(100%) invert(59%) sepia(98%) saturate(1946%) hue-rotate(201deg) brightness(97%) contrast(94%)'
+                                        : 'none'
+                                    }} 
+                                  />
+                                </button>
+                                {/* Copiar */}
+                                <button 
+                                  onClick={() => handleCopyMessage(getCopyableMessageText(msg), msg.messageId)}
+                                  title="copiar"
+                                  className="hover:opacity-80 transition-opacity ml-2"
+                                  style={{ 
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: '0',
+                                    margin: '0',
+                                    marginLeft: '8px'
+                                  }}
+                                >
+                                  {copiedMessages[msg.messageId] ? (
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                      <path d="M20 6L9 17L4 12" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                    </svg>
+                                  ) : (
+                                    <img 
+                                      src={copiarIcon} 
+                                      alt="Copiar" 
+                                      style={{ 
+                                        width: '16px', 
+                                        height: '16px',
+                                        display: 'block'
+                                      }} 
+                                    />
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Primeira mensagem: apenas botão copiar */}
+                          {msg.id === 1 && (
+                            <button 
+                              onClick={() => handleCopyMessage(getCopyableMessageText(msg), msg.messageId)}
+                              title="copiar"
+                              className="hover:opacity-80 transition-opacity flex items-center justify-center"
+                            >
+                              {copiedMessages[msg.messageId] ? (
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                  <path d="M20 6L9 17L4 12" stroke="#10B981" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                              ) : (
+                                <img src={copiarIcon} alt="Copiar" style={{ width: '16px', height: '16px' }} />
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                    </div>
+                  </div>
+                );
+              })}
+              {/* Referência para scroll automático */}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </div>
+      </main>
+
+      {showScrollToBottom && (
+        <button
+          type="button"
+          onClick={handleScrollToBottom}
+          aria-label="Ir para o fim"
+          className="fixed left-1/2 -translate-x-1/2 z-40 flex items-center justify-center rounded-full"
+          style={{
+            bottom: '180px',
+            width: '32px',
+            height: '32px',
+            border: '1px solid rgba(255,255,255,0.35)',
+            background: 'rgba(90, 90, 90, 0.35)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)'
+          }}
+        >
+          <ArrowDown size={20} color="#fff" strokeWidth={2.2} />
+        </button>
+      )}
+
+      {/* Input Area - Fixed at bottom */}
+      <div className="flex-shrink-0 bg-white border-t border-gray-200 pb-4 md:pb-8">
+        <div className="max-w-[900px] mx-auto px-3 md:px-6 pt-3 md:pt-4">
+          <div className="flex flex-col items-center">
+            <form onSubmit={handleSubmit} className="relative mb-2 md:mb-3 w-full md:w-[688px]">
+              {isLoading ? (
+                // Estado de loading - mostra "Aguarde..."
+                <div 
+                  className="w-full rounded-lg border flex items-start justify-between"
+                  style={{ height: '80px', borderColor: '#262626', padding: '12px' }}
+                >
+                  <span className="text-gray-500 text-sm">Aguarde...</span>
+                  <button
+                    type="button"
+                    className="flex items-center justify-center"
+                    style={{ 
+                      width: '32px',
+                      height: '32px'
+                    }}
+                  >
+                    <Square size={20} style={{ color: '#E84910' }} fill="#E84910" />
+                  </button>
+                </div>
+              ) : (
+                // Estado normal - textarea editável
+                <>
+                  <textarea
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSubmit(e);
+                      }
+                    }}
+                    placeholder={chatInputPlaceholder}
+                    className="scroll-modern w-full pr-12 md:pr-14 rounded-lg border focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent text-gray-700 placeholder-gray-400 shadow-sm text-sm md:text-base"
+                    style={{ height: '80px', borderColor: '#262626', padding: '12px 40px 12px 12px' }}
+                    rows={1}
+                  />
+                  <button
+                    type="submit"
+                    disabled={isLoading || isLoadingKnowledgeContexts || !selectedKnowledgeContextCode}
+                    className="absolute hover:opacity-80 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center rounded-md"
+                    style={{ 
+                      right: '12px', 
+                      top: '12px',
+                      width: '32px',
+                      height: '32px',
+                      backgroundColor: '#E4ECF5'
+                    }}
+                  >
+                    <img 
+                      src={sendIcon} 
+                      alt="Enviar" 
+                      className="w-4 h-4 md:w-5 md:h-5 transition-all"
+                      style={{
+                        filter: message.trim() 
+                          ? 'brightness(0) saturate(100%) invert(17%) sepia(89%) saturate(1729%) hue-rotate(203deg) brightness(93%) contrast(95%)'
+                          : 'none'
+                      }}
+                    />
+                  </button>
+                </>
+              )}
+            </form>
+
+            {knowledgeContextError ? (
+              <div className="w-full md:w-[688px] mb-2 rounded-md border border-red-200 bg-red-50 px-3 py-2">
+                <p className="text-xs text-red-700">{knowledgeContextError}</p>
+              </div>
+            ) : null}
+            
+            <p className="text-center text-xs text-gray-500 px-4">
+              IAs podem cometer erros,{' '}
+              <span className="text-[#a855f7] font-medium">
+                verifique as informações mais importantes.
+              </span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* Sidebar de Histórico */}
+      <HistorySidebar
+        isOpen={isHistoryOpen}
+        onClose={() => setIsHistoryOpen(false)}
+        history={chatHistory}
+        onSelectChat={handleLoadChat}
+        isLoading={isLoadingHistory}
+        onRefresh={handleRefreshHistory}
+        onDeleteChat={handleDeleteChat}
+        canDeleteChat={!!moodleUser?.isAdmin}
+      />
+
+      {isLogoutModalOpen && (
+        <div className="fixed inset-0 z-[60] bg-white flex items-center justify-center px-4">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-sm p-6">
+            <h3 className="text-lg font-semibold text-[#2D2D2D] mb-2">Deseja encerrar este chat?</h3>
+            <p className="text-sm text-gray-600 mb-6">
+              Ao encerrar o chat, você será redirecionado para o Moodle e sua sessão continuará ativa.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleConfirmLogout}
+                className="w-full px-4 py-2.5 text-sm rounded-md bg-[#E84910] text-white hover:bg-[#d4410d]"
+              >
+                Sim, quero encerrar
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseLogoutModal}
+                className="w-full px-4 py-2.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                Não, quero continuar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isExpandedOverlayOpen && (
+        <div className="fixed inset-0 z-[70] bg-black/50 flex items-center justify-center px-4">
+          <div className="w-full max-w-md rounded-xl bg-white shadow-lg border border-gray-200 p-6">
+            <p className="text-sm text-gray-700 mb-5">
+              Esta conversa foi aberta em uma nova aba. Para continuar aqui, atualize o conteúdo.
+            </p>
+            <div className="flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={handleResumeConversationHere}
+                disabled={isRefreshingHistory}
+                className="w-full px-4 py-2.5 text-sm rounded-md bg-[#E84910] text-white hover:bg-[#d4410d] disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {isRefreshingHistory ? 'Atualizando...' : 'Retomar conversa aqui'}
+              </button>
+              <button
+                type="button"
+                onClick={handleStartNewConversationHere}
+                disabled={isRefreshingHistory}
+                className="w-full px-4 py-2.5 text-sm rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Iniciar nova conversa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default Welcome;
