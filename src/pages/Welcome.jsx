@@ -580,7 +580,7 @@ function Welcome() {
       setSelectedKnowledgeContextCode(preferredContext.code);
     } catch (error) {
       console.error('Erro ao carregar contextos de conhecimento:', error);
-      setKnowledgeContextError('Nao foi possivel carregar as bases de conhecimento. Tente novamente.');
+      setKnowledgeContextError('');
     } finally {
       setIsLoadingKnowledgeContexts(false);
     }
@@ -624,6 +624,34 @@ function Welcome() {
     }
 
     return null;
+  };
+
+  const resolveRequestCourseExternalIds = () => {
+    const currentCourseExternalId =
+      routeCourseContext?.courseExternalId ||
+      currentMoodleCourseContext?.courseExternalId;
+
+    if (!currentCourseExternalId) return [];
+
+    const selectedContext = knowledgeContexts.find(
+      (context) => context.code === selectedKnowledgeContextCode
+    );
+    const allowedCourses = Array.isArray(selectedContext?.courses)
+      ? selectedContext.courses
+          .map((course) => course.course_external_id || course.courseExternalId)
+          .filter(Boolean)
+      : [];
+
+    if (allowedCourses.length === 0 || allowedCourses.includes(currentCourseExternalId)) {
+      return [currentCourseExternalId];
+    }
+
+    console.warn('Curso fora do contexto selecionado, omitindo filtro de curso:', {
+      courseExternalId: currentCourseExternalId,
+      knowledgeContextCode: selectedKnowledgeContextCode,
+      allowedCourses,
+    });
+    return [];
   };
 
   const matchChatToUser = (chat, user) => {
@@ -1131,15 +1159,12 @@ const normalizeMessageForDisplay = (value) => {
         // Se é a primeira mensagem (apenas mensagem de boas-vindas), inicia nova conversa
         if (messages.length === 1) {
           console.log('ðŸ†• Iniciando nova conversa...');
-          const currentCourseExternalId =
-            routeCourseContext?.courseExternalId ||
-            currentMoodleCourseContext?.courseExternalId;
           const currentKnowledgeContextCode =
             routeCourseContext?.knowledgeContextCode ||
             selectedKnowledgeContextCode;
           const chatResponse = await startChat(userMessageText, {
             knowledgeContextCode: currentKnowledgeContextCode,
-            courseExternalIds: currentCourseExternalId ? [currentCourseExternalId] : [],
+            courseExternalIds: resolveRequestCourseExternalIds(),
           });
           currentSessionId = chatResponse.session_id;
           aiResponse = chatResponse.response || chatResponse.message || chatResponse.answer || chatResponse.text;
@@ -1201,7 +1226,27 @@ const normalizeMessageForDisplay = (value) => {
         } else {
           // Mensagens seguintes: envia mensagem na conversa existente
           console.log('ðŸ’¬ Enviando mensagem na conversa:', currentSessionId);
-          const messageResponse = await sendChatMessage(currentSessionId, userMessageText);
+          let messageResponse;
+          try {
+            messageResponse = await sendChatMessage(currentSessionId, userMessageText);
+          } catch (error) {
+            if (error?.status !== 404) {
+              throw error;
+            }
+
+            console.warn('Sessao nao encontrada no backend, iniciando nova conversa:', currentSessionId);
+            const currentKnowledgeContextCode =
+              routeCourseContext?.knowledgeContextCode ||
+              selectedKnowledgeContextCode;
+            messageResponse = await startChat(userMessageText, {
+              knowledgeContextCode: currentKnowledgeContextCode,
+              courseExternalIds: resolveRequestCourseExternalIds(),
+            });
+            currentSessionId = messageResponse.session_id;
+            setSessionId(currentSessionId);
+            setCurrentChatId(currentSessionId);
+            saveActiveChatState(currentSessionId, false);
+          }
           aiResponse = messageResponse.response || messageResponse.message || messageResponse.answer || messageResponse.text;
           
           // Pega o stream_url se disponível

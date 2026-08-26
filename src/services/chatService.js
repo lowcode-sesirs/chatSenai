@@ -1,4 +1,4 @@
-import { getToken } from './tokenStore';
+import { clearToken, getToken } from './tokenStore';
 import { getMoodleTokenFromURL, validateMoodleSession } from './moodleAuthService';
 
 // Configuração dos endpoints da API
@@ -242,6 +242,7 @@ const fetchWithAuthRetry = async (buildRequest) => {
   if (response.status !== 401) return response;
 
   console.warn('401 detectado, renovando token via Moodle exchange...');
+  clearToken();
   const refreshed = await refreshAccessTokenFromMoodle();
   if (!refreshed) return response;
 
@@ -373,7 +374,7 @@ export const sendChatMessage = async (sessionId, message) => {
     }));
 
     if (!response.ok) {
-      throw new Error('Erro ao enviar mensagem');
+      throw await buildApiError(response, 'Erro ao enviar mensagem');
     }
 
     const data = await response.json();

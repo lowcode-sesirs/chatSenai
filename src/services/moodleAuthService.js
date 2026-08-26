@@ -178,7 +178,13 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
     if (!moodleToken) {
       return { ok: false, error: 'missing_moodle_token' };
     }
-    const hadAccessTokenBeforeExchange = !!getToken();
+    const accessTokenBeforeExchange = getToken();
+    const hadAccessTokenBeforeExchange = !!accessTokenBeforeExchange;
+    const clearTokenIfStillStale = () => {
+      if (!hadAccessTokenBeforeExchange || getToken() === accessTokenBeforeExchange) {
+        clearToken();
+      }
+    };
     if (typeof window !== 'undefined' && moodleToken) {
       sessionStorage.setItem('moodle_token', moodleToken);
     }
@@ -217,9 +223,7 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
           if (response.status === 401) {
             console.warn('Exchange Moodle retornou 401:', errorDetail || response.statusText);
             // Evita apagar um access_token recém-validado por outra requisição concorrente.
-            if (!hadAccessTokenBeforeExchange) {
-              clearToken();
-            }
+            clearTokenIfStillStale();
             return { ok: false, error: 'invalid_session' };
           }
           lastError = new Error(`Erro ${response.status}: ${errorDetail || response.statusText}`);
@@ -234,9 +238,7 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
     }
 
     if (!data) {
-      if (!hadAccessTokenBeforeExchange) {
-        clearToken();
-      }
+      clearTokenIfStillStale();
       throw lastError || new Error('Falha no exchange Moodle');
     }
 
@@ -244,9 +246,7 @@ export const validateMoodleSession = async (moodleToken, origin = 'moodle', page
     if (accessToken) {
       setToken(accessToken);
     } else {
-      if (!hadAccessTokenBeforeExchange) {
-        clearToken();
-      }
+      clearTokenIfStillStale();
       return { ok: false, error: 'missing_access_token' };
     }
 
