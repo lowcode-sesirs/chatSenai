@@ -386,7 +386,14 @@ export const sendChatMessage = async (sessionId, message) => {
 };
 
 // GET - Streaming de resposta (com fallback para polling)
-export const getChatStream = async (sessionId, onChunk, onComplete, onError, streamUrl = null) => {
+export const getChatStream = async (
+  sessionId,
+  onChunk,
+  onComplete,
+  onError,
+  streamUrl = null,
+  historyScope = {}
+) => {
   try {
     // Usa o stream_url fornecido ou constrói o padrão
     const url = streamUrl
@@ -422,7 +429,7 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
         
         // Tenta buscar a conversa completa
         try {
-          const chatData = await loadChat(sessionId);
+          const chatData = await loadChat(sessionId, historyScope);
           console.log('📦 Dados da conversa:', chatData);
           
           // Extrai a última mensagem da IA
@@ -562,13 +569,30 @@ export const getChatStream = async (sessionId, onChunk, onComplete, onError, str
 };
 
 // GET - Buscar histórico de conversas
-export const getChatHistory = async () => {
+const buildHistoryScopeQuery = ({ knowledgeContextCode, courseExternalId } = {}) => {
+  const params = new URLSearchParams();
+  const normalizedContextCode =
+    typeof knowledgeContextCode === 'string' ? knowledgeContextCode.trim() : '';
+  const normalizedCourseId =
+    typeof courseExternalId === 'string' ? courseExternalId.trim() : '';
+
+  if (normalizedContextCode) {
+    params.set('knowledge_context_code', normalizedContextCode);
+  }
+  if (normalizedCourseId) {
+    params.set('course_external_id', normalizedCourseId);
+  }
+  return params.toString();
+};
+
+export const getChatHistory = async (scope = {}) => {
   try {
     // Timeout de 15 segundos (aumentado para dar mais tempo)
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-    const url = `${API_BASE_URL}/chat/history`;
+    const query = buildHistoryScopeQuery(scope);
+    const url = `${API_BASE_URL}/chat/history${query ? `?${query}` : ''}`;
     const headers = getHeaders({ json: false });
     console.log('📡 Buscando histórico de conversas...');
     
@@ -619,9 +643,10 @@ export const getChatHistory = async () => {
 };
 
 // GET - Carregar conversa específica
-export const loadChat = async (sessionId) => {
+export const loadChat = async (sessionId, scope = {}) => {
   try {
-    const url = `${API_BASE_URL}/chat/history/${sessionId}`;
+    const query = buildHistoryScopeQuery(scope);
+    const url = `${API_BASE_URL}/chat/history/${sessionId}${query ? `?${query}` : ''}`;
     const headers = getHeaders({ json: false });
     console.log('📡 Carregando conversa...', { url, method: 'GET', headers });
     

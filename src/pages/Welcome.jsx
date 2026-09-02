@@ -20,12 +20,23 @@ import novaConversaIcon from '../assets/novaConversa.png';
 
 const MOODLE_PARENT_ORIGIN = 'https://pocsesi-rs.asdnet.com.br';
 const DEFAULT_KNOWLEDGE_CONTEXT_CODE = import.meta.env.VITE_DEFAULT_KNOWLEDGE_CONTEXT_CODE || '';
+const KNOWLEDGE_CONTEXT_LOAD_TIMEOUT_MS = 15000;
 const CURRENT_MOODLE_COURSE_KEY = 'senai_moodle_current_course';
 const ROUTE_COURSE_CONFIG = {
   'gestao-exames': {
     knowledgeContextCode: 'default',
     courseExternalId: 'gestao-exames',
     courseName: 'Gestão de Exames',
+  },
+  'centro-operadora': {
+    knowledgeContextCode: 'centro-operadora',
+    courseExternalId: 'centro-operadora',
+    courseName: 'Cadastros Operadora',
+  },
+  'suporte-erp-saude': {
+    knowledgeContextCode: 'suporte-erp-saude',
+    courseExternalId: 'suporte-erp-saude',
+    courseName: 'Suporte ERP Saúde',
   },
   'curso-local': {
     knowledgeContextCode: 'default',
@@ -559,7 +570,15 @@ function Welcome() {
     setIsLoadingKnowledgeContexts(true);
     setKnowledgeContextError('');
     try {
-      const contexts = await getKnowledgeContexts();
+      const contexts = await Promise.race([
+        getKnowledgeContexts(),
+        new Promise((_, reject) => {
+          setTimeout(
+            () => reject(new Error('Tempo limite ao carregar bases de conhecimento')),
+            KNOWLEDGE_CONTEXT_LOAD_TIMEOUT_MS
+          );
+        }),
+      ]);
       const activeContexts = contexts.filter((context) => !context.status || context.status === 'active');
       setKnowledgeContexts(activeContexts);
 
@@ -580,7 +599,13 @@ function Welcome() {
       setSelectedKnowledgeContextCode(preferredContext.code);
     } catch (error) {
       console.error('Erro ao carregar contextos de conhecimento:', error);
-      setKnowledgeContextError('');
+      const fallbackContextCode =
+        routeCourseContext?.knowledgeContextCode ||
+        selectedKnowledgeContextCode ||
+        DEFAULT_KNOWLEDGE_CONTEXT_CODE ||
+        'default';
+      setSelectedKnowledgeContextCode(fallbackContextCode);
+      setKnowledgeContextError('Nao foi possivel atualizar as bases de conhecimento. Tente novamente em instantes.');
     } finally {
       setIsLoadingKnowledgeContexts(false);
     }
@@ -690,6 +715,15 @@ function Welcome() {
     });
   };
 
+  const getHistoryScope = () => ({
+    knowledgeContextCode:
+      routeCourseContext?.knowledgeContextCode || selectedKnowledgeContextCode || null,
+    courseExternalId:
+      routeCourseContext?.courseExternalId ||
+      currentMoodleCourseContext?.courseExternalId ||
+      null,
+  });
+
 
   // Função para carregar histórico (lazy loading)
   const loadHistory = async (forceReload = false) => {
@@ -699,7 +733,7 @@ function Welcome() {
     setIsLoadingHistory(true);
     try {
       console.log('ðŸ”„ Carregando histórico de conversas...');
-      const history = await getChatHistory();
+      const history = await getChatHistory(getHistoryScope());
       
       // Verifica se recebeu dados válidos
       if (Array.isArray(history)) {
@@ -795,13 +829,20 @@ const normalizeMessageForDisplay = (value) => {
 
   // Carregar histórico automaticamente ao iniciar a aplicação (com delay)
   useEffect(() => {
+    setChatHistory([]);
+    setHistoryLoaded(false);
     // Adiciona um pequeno delay para evitar múltiplas chamadas simultâneas
     const timeoutId = setTimeout(() => {
-      loadHistory();
+      loadHistory(true);
     }, 1000); // 1 segundo de delay
     
     return () => clearTimeout(timeoutId);
-  }, []); // Executa apenas uma vez ao montar o componente
+  }, [
+    routeKnowledgeContextCode,
+    selectedKnowledgeContextCode,
+    routeCourseContext?.courseExternalId,
+    currentMoodleCourseContext?.courseExternalId,
+  ]);
 
   // Atualizar tempos relativos a cada minuto
   useEffect(() => {
@@ -1354,7 +1395,8 @@ const normalizeMessageForDisplay = (value) => {
               setIsLoading(false);
             },
             // streamUrl - URL fornecida pelo backend
-            streamUrl
+            streamUrl,
+            getHistoryScope()
           );
         }
         
@@ -1616,7 +1658,7 @@ Status: Erro 500 - Problema interno do servidor`;
       
       // Carrega a conversa completa da API
       console.log('ðŸ“¡ Buscando conversa completa da API:', chatId);
-        const chatData = await loadChat(chatId);
+        const chatData = await loadChat(chatId, getHistoryScope());
         
           if (!chatData) {
             console.log('âš ï¸ Conversa não encontrada no backend, iniciando nova.');
@@ -1778,7 +1820,7 @@ Status: Erro 500 - Problema interno do servidor`;
 
       try {
         console.log('Tentando restaurar chat ativo do storage:', storedChatId);
-        const history = await getChatHistory();
+        const history = await getChatHistory(getHistoryScope());
         if (ignore) return;
 
         if (Array.isArray(history)) {
@@ -1794,7 +1836,7 @@ Status: Erro 500 - Problema interno do servidor`;
         }
 
         console.log('Chat nao encontrado no historico, carregando direto pela API.');
-          const chatData = await loadChat(storedChatId);
+          const chatData = await loadChat(storedChatId, getHistoryScope());
           if (ignore) return;
 
           if (!chatData) {
@@ -1835,7 +1877,14 @@ Status: Erro 500 - Problema interno do servidor`;
     return () => {
       ignore = true;
     };
-  }, [location.pathname, location.search]);
+  }, [
+    location.pathname,
+    location.search,
+    routeKnowledgeContextCode,
+    selectedKnowledgeContextCode,
+    routeCourseContext?.courseExternalId,
+    currentMoodleCourseContext?.courseExternalId,
+  ]);
 
   const handleNewChat = () => {
     // A nova API salva automaticamente, então só precisamos limpar a interface
